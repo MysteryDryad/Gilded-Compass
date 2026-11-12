@@ -15,16 +15,28 @@ Based on the "Torn Seller Directory" build brief, with our own touches below.
 Not chosen for now (easy to add later): pinned favorites, price tracking, ignore list.
 
 ## How we work
-- Everything lives in GitHub, pushed to `main`.
-- Python standard library only until Cloudflare (Step 6). New tools only when the normal ones can't do the job.
-- API keys are never stored in files or pasted in chat. Scripts ask with hidden input.
+- Everything lives in GitHub, pushed to `main`. Cloudflare watches `main` and redeploys by itself.
+- **No PowerShell.** Everything runs in the browser or on Cloudflare.
+- API keys are never stored in files or pasted in chat.
+
+## How it fits together (browser version)
+1. **Sync page** (on our site): you paste your Limited key (Key A). Your browser fetches your bazaar logs
+   and the item list straight from api.torn.com. Key A goes only to Torn, is never saved, and never reaches our Worker.
+   Only the purchase data (seller id, items, price, time) is uploaded to our password-protected Worker.
+   Later syncs only fetch purchases newer than the last one.
+2. **Worker** (Cloudflare, free): serves the page behind a password, stores purchases in D1,
+   and uses Key B (Public, a Cloudflare secret) on a 1-minute cron to check bazaars open/closed and fill in usernames.
+3. **Deploys**: Cloudflare Workers Builds is connected to this GitHub repo, so each push to `main` deploys.
+   Database and secrets are set up in the Cloudflare dashboard. The Worker creates its own tables.
+4. **Getting there from Torn**: a bookmark next to Torn. An optional userscript button inside Torn can come later.
 
 ## Build steps
-1. `export_logs.py`: export bazaar purchases to `bazaar_logs.txt` (done, needs testing on real data)
-2. `fetch_item_types.py`: save `item_types.json` (done, needs testing)
-3. Build the page locally
-4. Probe the bazaar open/closed endpoint
-5. Usernames
-6. Cloudflare Worker + password
-7. Polish: Check now, phone layout, favorites, **notes**
-8. `refresh.bat`
+1. `tools/torn-test.html`: prove the browser can call Torn directly, and see real log fields  <- **now**
+2. Sync page: fetch logs + items in browser, aggregate, preview the ranking locally
+3. Probe the bazaar open/closed endpoint
+4. Cloudflare: connect repo, D1, secrets, password
+5. Upload purchases to the Worker; cron for open/closed + usernames
+6. Polish: Check now, phone layout, favorites, **notes**
+
+The old Python scripts (`export_logs.py`, `fetch_item_types.py`, `torn_api.py`) are a backup.
+We'll delete them once the browser test passes.
