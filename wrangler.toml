@@ -2,11 +2,10 @@ name = "gilded-compass"
 main = "src/worker.js"
 compatibility_date = "2025-09-01"
 
-# The page and its files. run_worker_first makes every request go through the password check.
+# The page is served straight from public/. Only /api/* runs the Worker code.
 [assets]
 directory = "./public"
 binding = "ASSETS"
-run_worker_first = true
 
 # D1 (not KV: KV's free tier only allows 1,000 writes a day). Create it in the Cloudflare dashboard,
 # then put its id here.
@@ -19,6 +18,5 @@ database_id = "PUT-DATABASE-ID-HERE"
 [triggers]
 crons = ["* * * * *"]
 
-# Secrets (set in the dashboard: Worker > Settings > Variables and Secrets, never in this file):
-#   TORN_API_KEY   Torn key with Public access only (Key B)
-#   PAGE_PASSWORD  password for the site
+# One secret, set in the dashboard (Worker > Settings > Variables and Secrets), never in this file:
+#   TORN_API_KEY   the site's own Torn key with Public access only, used to check bazaars and names

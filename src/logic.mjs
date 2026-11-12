@@ -2,7 +2,10 @@
 
 export const ONE_DOLLAR = '$1 items';
 export const TOP_TIER = 100;             // top 100 sellers are checked more often
-export const TARGET = { 1: 300, 2: 2700 }; // seconds: tier 1 about every 5 min, tier 2 about every 45 min
+// Check kinds: 1 = in someone's top 100 (about every 5 min), 2 = other sellers (about every 45 min),
+// 3 = had no bazaar last time (once a day, in case they open one), 0 = account not found (never).
+export const TARGET = { 1: 300, 2: 2700, 3: 86400 };
+export const kindOf = (missing, hasBazaar, top) => (missing ? 0 : hasBazaar === 0 ? 3 : top ? 1 : 2);
 export const MAX_TORN_PER_RUN = 36;
 export const PARALLEL = 10;
 export const MAX_NAMES_PER_RUN = 12;
@@ -107,24 +110,18 @@ export function validBuy(b) {
   return { id, ts: Math.trunc(ts), s, it, ce: num(b.ce), ct: num(b.ct) };
 }
 
-// Compare secrets without leaking where they differ (both hashed first, so length does not leak either).
-export async function safeEqual(a, b) {
-  const enc = new TextEncoder();
-  const [x, y] = await Promise.all([a, b].map(v => crypto.subtle.digest('SHA-256', enc.encode(String(v)))));
-  const u = new Uint8Array(x), v = new Uint8Array(y);
-  let d = 0;
-  for (let i = 0; i < u.length; i++) d |= u[i] ^ v[i];
-  return d === 0;
+// Sign-in tokens: random, and only their SHA-256 is stored in the database.
+export function newToken() {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
-
-// "Authorization: Basic xxx" -> the password part (username is ignored).
-export function basicPassword(header) {
-  const m = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(header || '');
-  if (!m) return null;
-  try {
-    const bin = atob(m[1]);
-    const text = new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
-    const i = text.indexOf(':');
-    return i < 0 ? null : text.slice(i + 1);
-  } catch (e) { return null; }
+export async function sha256hex(text) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(text)));
+  return [...new Uint8Array(d)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
+export function bearer(header) {
+  const m = /^Bearer\s+([A-Za-z0-9_-]{20,100})\s*$/.exec(header || '');
+  return m ? m[1] : null;
+}
+// Torn API keys are 16 letters and digits.
+export const looksLikeKey = k => /^[A-Za-z0-9]{16}$/.test(String(k || ''));

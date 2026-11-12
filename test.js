@@ -18,6 +18,11 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
   eq('parse missing seller -> null', U.parseBuy({ id: 'b', timestamp: 1, data: { items: [{ id: 1, qty: 1 }] } }), null);
   eq('parse no items -> null', U.parseBuy({ id: 'c', timestamp: 1, data: { seller: 5 } }), null);
   eq('normalize object log', U.normalizeLog({ x: { timestamp: 1 } }), [{ id: 'x', timestamp: 1 }]);
+  eq('only bazaar buys pass', [
+    U.isFromBazaar({ details: { id: 1225, title: 'Bazaar buy' } }, [1225]),
+    U.isFromBazaar({ details: { id: 1112, title: 'Item market buy' } }, [1225]),
+    U.isFromBazaar({ details: { id: 1225 } }, [1225]),
+    U.isFromBazaar({ details: { id: 4 } }, [1225])], [true, false, true, false]);
 
   /* ---------- worker logic ---------- */
   const items = { 186: ['Sheep Plushie', 'Plushie'], 260: ['Dahlia', 'Flower'] };
@@ -63,11 +68,15 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
   eq('validBuy ok', L.validBuy({ id: 'x', ts: 5, s: 9, it: [[1, 2]], ce: '3' }), { id: 'x', ts: 5, s: 9, it: [[1, 2]], ce: 3, ct: null });
   eq('validBuy rejects bad seller', L.validBuy({ id: 'x', ts: 5, s: 'abc', it: [[1, 2]] }), null);
 
-  eq('safeEqual same', await L.safeEqual('hunter2', 'hunter2'), true);
-  eq('safeEqual different', await L.safeEqual('hunter2', 'hunter3'), false);
-  eq('safeEqual different length', await L.safeEqual('a', 'ab'), false);
-  eq('basic auth password', L.basicPassword('Basic ' + Buffer.from('anything:pä ss:word').toString('base64')), 'pä ss:word');
-  eq('basic auth garbage', L.basicPassword('Bearer abc'), null);
+  eq('token is url-safe and long', /^[A-Za-z0-9_-]{43}$/.test(L.newToken()), true);
+  eq('tokens differ', L.newToken() !== L.newToken(), true);
+  eq('sha256hex', await L.sha256hex('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  eq('bearer header', L.bearer('Bearer ' + 'a'.repeat(43)), 'a'.repeat(43));
+  eq('bearer garbage', L.bearer('Basic abc'), null);
+  eq('key shape', [L.looksLikeKey('AbCdEfGh12345678'), L.looksLikeKey('short'), L.looksLikeKey('AbCdEfGh1234567!')], [true, false, false]);
+  eq('check kinds: top, other, no bazaar, gone', [L.kindOf(0, 1, 1), L.kindOf(0, null, 0), L.kindOf(0, 0, 1), L.kindOf(1, 1, 1)], [1, 2, 3, 0]);
+  eq('no-bazaar sellers re-checked daily', L.pickDue([{ id: 9, t: 1000, tier: 3 }], 1000 + 86400, 5), [9]);
+  eq('no-bazaar sellers not before a day', L.pickDue([{ id: 9, t: 1000, tier: 3 }], 1000 + 3600, 5), []);
 
   console.log(fail ? `\n${fail} FAILED` : '\nAll passed');
   process.exit(fail ? 1 : 0);

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.2.0
-// @description  Sends your Torn bazaar purchases to your private Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
+// @version      0.3.0
+// @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
 // @supportURL   https://github.com/MysteryDryad/Gilded-Compass/issues
@@ -20,15 +20,14 @@
  * GILDED COMPASS (Torn PDA and Tampermonkey/Violentmonkey)
  *
  * What it does
- * - 🧭 button on Torn: tap opens your Gilded Compass site. Hold it (or use the Tampermonkey menu) for settings.
- * - In the background (when you open the site, and every 15 minutes while Torn is open) it reads YOUR new
- *   "Bazaar buy" log entries and the Torn item list, and sends the purchases to your site.
+ * - 🧭 button on Torn: tap opens the Gilded Compass site, signed in as you. Hold it (or use the Tampermonkey menu) for settings.
+ * - In the background (when you tap 🧭, and every 15 minutes while Torn is open) it reads YOUR new "Bazaar buy"
+ *   log entries (bazaar purchases only) and sends them to the site, where only you can see them.
  *
  * Privacy and safety
  * - Read-only: it never performs game actions, clicks or purchases for you.
- * - Your Torn API key (a Custom key: user basic + log, torn items + logtypes) is sent only to api.torn.com and is
- *   stored only on this device. In Torn PDA it can use PDA's own key. Your site only receives purchases, never the key.
- * - The site password is stored on this device and sent only to your site.
+ * - Your Torn API key (Custom: user basic + log, torn logtypes) is stored only on this device. It is sent to api.torn.com,
+ *   and once to the Gilded Compass site to confirm who you are (the site does not store it). In Torn PDA it can use PDA's key.
  */
 (function () {
   'use strict';
@@ -37,7 +36,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.2.0'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.3.0'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -83,14 +82,29 @@
   }
 
   /* ===================== settings ===================== */
+  const SITE = 'https://gilded-compass.PUT-SUBDOMAIN-HERE.workers.dev'; // the Gilded Compass website, set after the first deploy
   const cfg = {
     key: () => sget('apikey', '') || (IN_PDA ? PDA_KEY : ''),
-    site: () => String(sget('site', '') || '').replace(/\/+$/, ''),
-    pw: () => sget('sitepw', ''),
-    ready: () => !!(cfg.key() && cfg.site() && cfg.pw())
+    site: () => String(sget('site', '') || SITE).replace(/\/+$/, ''), // 'site' in storage only overrides it for testing
+    ready: () => !!cfg.key()
   };
-  const KEYURL = 'https://www.torn.com/preferences.php#tab=api?step=addNewKey&title=GildedCompass&user=basic,log&torn=items,logtypes';
-  const basic = pw => 'Basic ' + btoa(unescape(encodeURIComponent('gc:' + pw)));
+  const KEYURL = 'https://www.torn.com/preferences.php#tab=api?step=addNewKey&title=GildedCompass&user=basic,log&torn=logtypes';
+
+  /* ===================== the site ===================== */
+  function siteCall(method, path, body, token) {
+    const h = { 'Content-Type': 'application/json' };
+    if (token) h.Authorization = 'Bearer ' + token;
+    return httpRetry(method, cfg.site() + path, h, body == null ? undefined : JSON.stringify(body));
+  }
+  // Signs in with the Torn key (the site asks Torn who owns it, then forgets it) and keeps the sign-in token here.
+  async function signIn(key) {
+    const r = await siteCall('POST', '/api/login', { key: key || cfg.key() });
+    let j = {}; try { j = JSON.parse(r.text); } catch (e) { /* not json */ }
+    if (r.status !== 200 || !j.token) throw Object.assign(new Error('Could not sign in to the site: ' + (j.error || 'HTTP ' + r.status)), { setup: r.status === 401 || r.status === 400 });
+    sset('token', j.token); sset('me', { uid: j.uid, name: j.name });
+    return j.token;
+  }
+  async function token() { return sget('token', '') || signIn(); }
 
   /* ===================== Torn API ===================== */
   async function apiUrl(url, key) {
@@ -128,6 +142,14 @@
     return Array.isArray(t) ? t : Object.entries(t || {}).map(([id, title]) => ({ id: Number(id), title: typeof title === 'string' ? title : title && title.title }));
   }
   const isBazaarBuy = title => /^bazaar buy/i.test(String(title || '').trim());
+  // Torn already filters by log type; this double-checks each entry is a "Bazaar buy" one.
+  function isFromBazaar(e, ids) {
+    const d = (e && e.details) || {};
+    const type = Number(d.id != null ? d.id : e && e.log);
+    const title = d.title || (e && e.title);
+    if (title) return isBazaarBuy(title);
+    return type ? ids.map(Number).includes(type) : true;
+  }
   // One log entry -> compact purchase { id, ts, s: seller, it: [[itemId, qty]], ce: cost_each, ct: cost_total }, or null.
   function parseBuy(e) {
     const d = (e && e.data) || {};
@@ -142,7 +164,7 @@
   /* ===================== state ===================== */
   // pending: purchases read from the log but not yet accepted by the site. resume: a half-done log read.
   function loadState() {
-    return Object.assign({ pending: {}, lastSync: 0, resume: null, logIds: null, itemsSent: 0, sent: 0, badCount: 0,
+    return Object.assign({ pending: {}, lastSync: 0, resume: null, logIds: null, sent: 0, badCount: 0,
       rawSamples: [], badSamples: [], lastError: null, lastRun: 0, syncedAt: 0 }, sget('state', null) || {});
   }
   let state = loadState();
@@ -157,17 +179,6 @@
     save();
     return state.logIds;
   }
-  // Item id -> [name, type, sub_type], refreshed weekly and sent to the site when it changes.
-  async function itemsIfDue() {
-    if (Date.now() - (state.itemsSent || 0) < 7 * 86400000) return null;
-    const j = await apiPatient('torn/items');
-    const list = Array.isArray(j.items) ? j.items : Object.entries(j.items || {}).map(([id, v]) => Object.assign({ id }, v));
-    const out = {};
-    list.forEach(i => { if (i && i.id) out[i.id] = [i.name, i.type || 'Unknown', i.sub_type || null]; });
-    state.itemSample = list.slice(0, 2);
-    return Object.keys(out).length ? out : null;
-  }
-
   /* ===================== sync: log -> site ===================== */
   // Newest first. The first sync reads all history; later ones only read entries newer than the last one.
   // Progress is saved every page, so a stopped read carries on next time.
@@ -183,6 +194,7 @@
       const arr = normalizeLog((await apiPatient('user/log', params)).log);
       let fresh = 0, oldest = Infinity;
       arr.forEach(e => {
+        if (!isFromBazaar(e, ids)) return; // bazaar purchases only
         const ts = Number(e.timestamp);
         if (ts > newest) newest = ts;
         if (ts && ts < oldest) oldest = ts;
@@ -206,22 +218,18 @@
     save();
     return added;
   }
-  async function sendToSite(items) {
+  async function sendToSite() {
     const ids = Object.keys(state.pending);
-    let i = 0;
-    do {
+    for (let i = 0; i < ids.length; i += CHUNK) {
       const chunk = ids.slice(i, i + CHUNK);
       const body = { buys: chunk.map(id => state.pending[id]) };
-      if (items && i === 0) body.items = items;
-      const r = await httpRetry('POST', cfg.site() + '/api/purchases', { 'Content-Type': 'application/json', Authorization: basic(cfg.pw()) }, JSON.stringify(body));
-      if (r.status === 401) throw Object.assign(new Error('Your site rejected the password. Hold 🧭 to fix it in settings.'), { setup: true });
-      if (r.status !== 200) throw new Error('Your site answered HTTP ' + r.status + ' ' + String(r.text || '').slice(0, 120));
+      let r = await siteCall('POST', '/api/purchases', body, await token());
+      if (r.status === 401) { sset('token', ''); r = await siteCall('POST', '/api/purchases', body, await signIn()); }
+      if (r.status !== 200) throw new Error('The site answered HTTP ' + r.status + ' ' + String(r.text || '').slice(0, 120));
       chunk.forEach(id => delete state.pending[id]);
       state.sent += chunk.length;
-      if (items && i === 0) state.itemsSent = Date.now();
       save();
-      i += CHUNK;
-    } while (i < ids.length);
+    }
   }
 
   let running = false;
@@ -232,8 +240,8 @@
     running = true; sset('lock', Date.now()); setBtn('busy');
     try {
       const added = await readLog();
-      const items = await itemsIfDue();
-      if (Object.keys(state.pending).length || items) await sendToSite(items);
+      if (Object.keys(state.pending).length) await sendToSite();
+      else await token();
       state.lastError = null; state.syncedAt = Date.now();
       setBtn('ok', added ? `Sent ${added} new purchase${added === 1 ? '' : 's'}` : 'Up to date');
     } catch (e) {
@@ -275,17 +283,18 @@
   function renderSetup() {
     const p = document.getElementById('gc-setup'); if (!p) return;
     const usingPda = IN_PDA && !sget('apikey', '');
+    const me = sget('me', null);
     p.innerHTML = `<h3><span>🧭 Gilded Compass <small style="color:#9aa3b5;font-weight:400">v${VERSION}</small></span><button data-act="close">✕</button></h3>
-      <label>Your site address<input id="gc-site" type="url" placeholder="https://gilded-compass.yourname.workers.dev" value="${esc(cfg.site())}"></label>
-      <label>Site password<input id="gc-pw" type="password" autocomplete="off" placeholder="${cfg.pw() ? 'saved (leave empty to keep)' : 'the PAGE_PASSWORD you chose'}"></label>
-      <label>Torn API key (Custom, reads your log)<input id="gc-key" type="password" autocomplete="off" placeholder="${usingPda ? 'using Torn PDA\'s key' : sget('apikey', '') ? 'saved (leave empty to keep)' : 'paste the new key'}"></label>
+      <p class="gc-note" style="margin-top:0">Ranks the bazaars you buy from. It reads only your <b>Bazaar buy</b> log, and only you can see your list.</p>
+      ${me ? `<p class="gc-note">Signed in as <b style="color:#ece6d6">${esc(me.name || '')}</b> [${esc(me.uid)}]</p>` : ''}
+      <label>Torn API key (Custom, with your log ticked)<input id="gc-key" type="password" autocomplete="off" placeholder="${usingPda ? 'using Torn PDA\'s key' : sget('apikey', '') ? 'saved (leave empty to keep)' : 'paste the new key'}"></label>
       <a class="gc-a" href="${KEYURL}" target="_blank" rel="noopener">Create the key for me ↗</a>
       ${IN_PDA && !usingPda ? '<button data-act="usepda">Use Torn PDA\'s key</button>' : ''}
       <div id="gc-msg">${msg.text ? `<div class="${msg.ok ? 'gc-ok' : 'gc-err'}">${esc(msg.text)}</div>` : state.lastError ? `<div class="gc-err">Last sync: ${esc(state.lastError)}</div>` : ''}</div>
-      <button data-act="save" class="gc-gold">Save and test</button>
+      <button data-act="save" class="gc-gold">Save and sign in</button>
       <p class="gc-note">${state.sent ? `${state.sent.toLocaleString('en-US')} purchases sent so far` : 'Nothing sent yet'}${state.syncedAt ? ', last sync ' + new Date(state.syncedAt).toLocaleString() : ''}.</p>
       <button data-act="resend">Re-send all purchases</button> <button data-act="debug">Copy debug sample</button>
-      <p class="gc-note">Read-only: never acts in the game. The Torn key goes only to api.torn.com; your site only receives purchases.</p>`;
+      <p class="gc-note">Read-only: never acts in the game. Your key stays on this device; it goes to api.torn.com, and once to the Gilded Compass site to confirm who you are (not stored there).</p>`;
   }
   // Messages update in place, so whatever was typed in the boxes stays.
   function setMsg(text, ok) {
@@ -303,36 +312,31 @@
     if (act === 'close') { document.getElementById('gc-setup').hidden = true; return; }
     if (act === 'usepda') { sset('apikey', ''); el.remove(); document.getElementById('gc-key').placeholder = 'using Torn PDA\'s key'; return; }
     if (act === 'save') {
-      const site = (document.getElementById('gc-site').value || '').trim().replace(/\/+$/, '');
-      const pw = document.getElementById('gc-pw').value || cfg.pw();
       const key = (document.getElementById('gc-key').value || '').trim() || cfg.key();
-      if (!/^(https:\/\/[^/]+|http:\/\/(127\.0\.0\.1|localhost)(:\d+)?)$/i.test(site)) { setMsg('Site address should look like https://gilded-compass.yourname.workers.dev', false); return; }
-      if (!pw || !key) { setMsg('Fill in the password and the Torn key.', false); return; }
-      el.disabled = true; el.textContent = 'Testing…';
+      if (!key) { setMsg('Paste your Torn API key first.', false); return; }
+      el.disabled = true; el.textContent = 'Checking…';
       try {
         await api('user/log', { limit: 1 }, key); // the log is the part that needs the right access
-        const r = await httpRetry('GET', site + '/api/ping', { Authorization: basic(pw) });
-        if (r.status === 401) throw new Error('The site rejected that password.');
-        if (r.status !== 200) throw new Error('Could not reach the site (HTTP ' + r.status + '). Check the address.');
-        sset('site', site); sset('sitepw', pw);
+        await signIn(key);
         if (key !== (IN_PDA ? PDA_KEY : '')) sset('apikey', key);
         state.needsSetup = false; state.lastError = null; save();
-        setMsg('All good. Syncing now, then tap 🧭 to open your site.', true);
+        const me = sget('me', {});
+        setMsg(`All good${me.name ? ', ' + me.name : ''}. Syncing now; tap 🧭 to open your list.`, true);
         run('tap');
       } catch (e) { setMsg(hideKey(e.message || e), false); }
-      el.disabled = false; el.textContent = 'Save and test';
+      el.disabled = false; el.textContent = 'Save and sign in';
       return;
     }
     if (act === 'resend') {
       if (el.getAttribute('data-sure') !== '1') { el.setAttribute('data-sure', '1'); el.textContent = 'Tap again to re-read your whole log'; return; }
-      state.lastSync = 0; state.resume = null; state.itemsSent = 0; state.rawSamples = []; state.badSamples = []; state.badCount = 0; save();
+      state.lastSync = 0; state.resume = null; state.rawSamples = []; state.badSamples = []; state.badCount = 0; save();
       setMsg('Re-reading everything in the background (the site ignores duplicates).', true);
       el.removeAttribute('data-sure'); el.textContent = 'Re-send all purchases';
       run('tap');
       return;
     }
     if (act === 'debug') {
-      const sample = { version: VERSION, inPDA: IN_PDA, usingPdaKey: IN_PDA && !sget('apikey', ''), siteSet: !!cfg.site(), logTypes: state.logTypesSeen || null,
+      const sample = { version: VERSION, inPDA: IN_PDA, usingPdaKey: IN_PDA && !sget('apikey', ''), signedIn: !!sget('token', ''), logTypes: state.logTypesSeen || null,
         logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
         resume: state.resume, lastError: state.lastError, itemSample: state.itemSample || null,
         rawSamples: state.rawSamples, badSamples: state.badSamples, parsedSample: state.rawSamples.map(parseBuy) };
@@ -354,8 +358,11 @@
   // Tap: open the site in a new tab (and sync). Not set up yet, or a problem: settings.
   function tap() {
     if (!cfg.ready() || state.needsSetup) { openSetup(); return; }
-    const w = window.open(cfg.site() + '/', '_blank', 'noopener');
-    if (!w && !IN_PDA) location.href = cfg.site() + '/';
+    const t = sget('token', '');
+    const url = cfg.site() + '/' + (t ? '#t=' + t : ''); // the token after # never reaches any server log
+    const w = window.open(url, '_blank');
+    if (w) { try { w.opener = null; } catch (e) { /* ignore */ } }
+    else if (!IN_PDA) location.href = url; // pop-up blocked: open it here instead
     run('tap');
   }
   function placeBtn(b, pos) {
@@ -415,7 +422,7 @@
   }
 
   if (typeof module !== 'undefined') {
-    module.exports = { VERSION, parseBuy, normalizeLog, logTypeList, isBazaarBuy };
+    module.exports = { VERSION, parseBuy, normalizeLog, logTypeList, isBazaarBuy, isFromBazaar };
   }
   if (typeof document !== 'undefined' && !globalThis.__GC_TEST) init();
 })();
