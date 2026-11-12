@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.4.0
+// @version      0.4.1
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -42,7 +42,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.4.0'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.4.1'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -433,6 +433,15 @@
     }
     if (act === 'open') { setTimeout(() => { document.getElementById('gc-setup').hidden = true; }, 300); return; } // the link itself opens the site
   }
+  const siteUrl = () => { const t = sget('token', ''); return cfg.site() + '/' + (t ? '#t=' + t : ''); }; // the token after # never reaches any server log
+  // Opens the site in a new tab (or in a tab opened earlier, while the tap was still fresh). Returns false if the phone blocked it.
+  function openSite(tab) {
+    const url = siteUrl();
+    if (tab && !tab.closed) { try { tab.location.href = url; tab.opener = null; return true; } catch (e) { /* fall through */ } }
+    const w = window.open(url, '_blank');
+    if (w) { try { w.opener = null; } catch (e) { /* ignore */ } return true; }
+    return false;
+  }
   // When a new tab can't be opened automatically, a plain link always works.
   function showOpenLink(text) {
     const p = document.getElementById('gc-setup');
@@ -555,7 +564,10 @@
   }
 
   if (typeof module !== 'undefined') {
-    module.exports = { VERSION, parseBuy, normalizeLog, logTypeList, isBazaarBuy, isFromBazaar };
+    module.exports = { VERSION, parseBuy, normalizeLog, logTypeList, isBazaarBuy, isFromBazaar,
+      // everything the button, the settings box and the site page call; a missing one makes the test fail to load
+      wired: { tap, openSite, siteUrl, showOpenLink, openSetup, renderSetup, onSetup, setMsg, setStatus, statusText, run, readRange,
+        sendToSite, siteMe, signIn, token, debugSample, initSite, init, mount, attachPointer, placeBtn, stepAside, setBtn } };
   }
   if (typeof document !== 'undefined' && !globalThis.__GC_TEST) init();
 })();

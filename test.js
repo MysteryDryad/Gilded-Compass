@@ -11,6 +11,7 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
   /* ---------- userscript ---------- */
   const head = fs.readFileSync(__dirname + '/gilded-compass.user.js', 'utf8').match(/@version\s+(\S+)/)[1];
   eq('@version matches VERSION', head, U.VERSION);
+  eq('every wired-up userscript function exists', Object.entries(U.wired).filter(([, f]) => typeof f !== 'function').map(([n]) => n), []);
   eq('logtypes list', U.logTypeList({ logtypes: [{ id: 1225, title: 'Bazaar buy' }, { id: 9, title: 'Bazaar sell' }] }).filter(t => U.isBazaarBuy(t.title)).map(t => t.id), [1225]);
   eq('logtypes object', U.logTypeList({ logtypes: { 1225: 'Bazaar buy', 1226: 'Bazaar buy (legacy)', 3: 'Attack' } }).filter(t => U.isBazaarBuy(t.title)).map(t => t.id), [1225, 1226]);
   const e1 = { id: 'a', timestamp: 100, details: { title: 'Bazaar buy' }, data: { seller: 55, items: [{ id: 186, uid: null, qty: 3 }], cost_each: 1, cost_total: 3 } };
