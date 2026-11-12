@@ -1,0 +1,7 @@
+# Private data and secrets: never commit these
+bazaar_logs.txt
+torn_cache.json
+.dev.vars
+node_modules/
+.wrangler/
+__pycache__/
