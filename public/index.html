@@ -57,7 +57,10 @@ header.brand { padding: 20px 0 10px; display: flex; align-items: center; gap: 14
 .brand h1 { font: 700 26px/1.05 Cinzel, Georgia, serif; letter-spacing: .06em; margin: 0;
   background: linear-gradient(180deg, var(--gold-hi), var(--gold)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .brand .tag { color: var(--muted); font-size: 12.5px; letter-spacing: .02em; }
-.theme { margin-left: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 999px; background: var(--card); overflow: hidden; align-self: flex-start; }
+.tools { margin-left: auto; display: flex; gap: 8px; align-items: center; align-self: flex-start; }
+.cog { width: 34px; height: 30px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted); cursor: pointer; display: grid; place-items: center; padding: 0; }
+.cog:hover, .cog[aria-pressed="true"] { color: var(--gold); border-color: var(--gold); }
+.theme { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; background: var(--card); overflow: hidden; align-self: flex-start; }
 .theme button { border: 0; background: none; cursor: pointer; padding: 6px 10px; line-height: 0; color: var(--muted); }
 .theme button:hover { color: var(--gold); }
 .theme button[aria-pressed="true"] { background: var(--gold); color: var(--on-gold); }
@@ -150,6 +153,27 @@ select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); ba
 .empty { padding: 48px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 16px; }
 footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: center; }
 
+/* settings page (⚙): shown instead of the list */
+body.in-settings #app > :not(#settingsView) { display: none !important; }
+#settingsView { max-width: 680px; margin: 4px auto 40px; }
+.sv-head { display: flex; align-items: center; gap: 12px; margin: 6px 0 14px; }
+.sv-head h2 { margin: 0; font: 700 20px/1.2 Cinzel, Georgia, serif; color: var(--gold); letter-spacing: .05em; }
+.sv-card { border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(160deg, var(--card2), var(--card)); padding: 14px 16px; margin-bottom: 12px; box-shadow: var(--shadow); }
+.sv-card h3 { margin: 0 0 6px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--gold); }
+.sv-card p { margin: 6px 0; color: var(--muted); font-size: 13px; }
+.sv-card p b { color: var(--text); }
+.sv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.sv-msg { font-size: 12.5px; color: var(--gold); margin-top: 8px; }
+.sv-msg:empty { display: none; }
+.choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 6px; margin-top: 10px; }
+.choices button { padding: 8px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: 13px; }
+.choices button:hover { border-color: var(--gold); }
+.choices button[aria-pressed="true"] { background: var(--gold); border-color: var(--gold); color: var(--on-gold); font-weight: 600; }
+.sv-card .seg { flex-wrap: wrap; }
+.sv-card summary { cursor: pointer; color: var(--gold); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; font-weight: 700; }
+#debugOut { width: 100%; min-height: 140px; margin-top: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: 11.5px/1.4 ui-monospace, Menlo, monospace; padding: 8px; }
+.btn.danger { border-color: var(--warn); color: var(--warn); }
+
 /* sign in */
 .login { max-width: 580px; margin: 24px auto 40px; background: linear-gradient(160deg, var(--card2), var(--card)); border: 1px solid var(--line); border-radius: 18px; padding: 24px; box-shadow: var(--shadow); }
 .login h2 { font: 700 20px/1.2 Cinzel, Georgia, serif; color: var(--gold); margin: 0 0 8px; letter-spacing: .04em; }
@@ -167,8 +191,8 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
 @media (max-width: 700px) {
   header.brand { padding-top: 14px; gap: 10px; position: relative; }
   .brand h1 { font-size: 19px; }
-  .titleblock { padding-right: 92px; min-width: 0; }
-  .theme { position: absolute; top: 16px; right: 0; }
+  .titleblock { padding-right: 136px; min-width: 0; }
+  .tools { position: absolute; top: 16px; right: 0; gap: 6px; }
   .theme button { padding: 6px 8px; }
   .theme svg { width: 14px; height: 14px; }
   .who { width: 100%; text-align: left; }
@@ -195,11 +219,14 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
       <svg viewBox="0 0 32 32" width="34" height="34"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" stroke-width=".7" opacity=".55"/><path d="M16 3.5 19 16 16 28.5 13 16Z" fill="currentColor"/><path d="M3.5 16 16 13.2 28.5 16 16 18.8Z" fill="currentColor" opacity=".5"/><circle cx="16" cy="16" r="1.7" fill="var(--bg)"/></svg>
     </span>
     <div class="titleblock"><h1>Gilded Compass</h1><div class="tag" id="tagline">Every bazaar you buy from</div></div>
-    <div class="theme" role="group" aria-label="Colour mode">
+    <div class="tools">
+      <div class="theme" role="group" aria-label="Colour mode">
       <button data-theme-set="light" title="Light" aria-label="Light mode"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></g></svg></button><button data-theme-set="dark" title="Dark" aria-label="Dark mode"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1Z" fill="currentColor"/></svg></button><button data-theme-set="system" title="Same as this device" aria-label="Same as this device"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17Z" fill="currentColor"/></svg></button>
+      </div>
+      <button class="cog" id="cogBtn" hidden title="Settings" aria-label="Settings" aria-pressed="false"><svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M10.3 2h3.4l.5 2.6c.6.2 1.2.5 1.8.9l2.4-1.1 2.4 2.4-1.1 2.4c.4.6.7 1.2.9 1.8l2.6.5v3.4l-2.6.5c-.2.6-.5 1.2-.9 1.8l1.1 2.4-2.4 2.4-2.4-1.1c-.6.4-1.2.7-1.8.9l-.5 2.6h-3.4l-.5-2.6c-.6-.2-1.2-.5-1.8-.9l-2.4 1.1-2.4-2.4 1.1-2.4c-.4-.6-.7-1.2-.9-1.8L2 13.7v-3.4l2.6-.5c.2-.6.5-1.2.9-1.8L4.4 5.6 6.8 3.2l2.4 1.1c.6-.4 1.2-.7 1.8-.9ZM12 15.6a3.6 3.6 0 1 0 0-7.2 3.6 3.6 0 0 0 0 7.2Z"/></svg></button>
     </div>
     <div class="who" id="who" hidden>
-      <div><span id="whoName"></span> · <button class="linkbtn" id="logoutBtn">Sign out</button></div>
+      <div><span id="whoName"></span></div>
       <div id="statusline"><span class="dot"></span><span id="statustext">Loading…</span></div>
     </div>
   </header>
@@ -253,18 +280,73 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
         <span class="seg" role="group" aria-label="Visits">
           <button data-visit="any" aria-pressed="true">Any visit</button><button data-visit="yes" aria-pressed="false">Visited</button><button data-visit="no" aria-pressed="false">Not visited</button>
         </span>
-        <label class="lbl">Glow after a visit for
-          <select id="span"><option value="1800">30 min</option><option value="3600">1 hour</option><option value="14400">4 hours</option><option value="86400">1 day</option></select>
-        </label>
-        <button class="btn small" id="resetHl" title="Turn the glow off now; visit times are kept">Reset glow</button>
-        <button class="btn small" id="clearVisits" title="Forget all visit times">Clear visit marks</button>
       </div>
     </section>
 
     <div class="grid" id="rows"></div>
     <div class="empty" id="empty" hidden></div>
     <div class="more"><span id="showing"></span><button class="btn" id="moreBtn" hidden>Show 100 more</button></div>
-    <footer><span id="footer"></span> · <button class="linkbtn" id="forgetBtn">Delete my data</button></footer>
+    <footer><span id="footer"></span></footer>
+
+    <section id="settingsView" hidden aria-label="Settings">
+      <div class="sv-head"><button class="btn" id="backBtn">← Back</button><h2>Settings</h2></div>
+
+      <div class="sv-card">
+        <h3>Purchase history</h3>
+        <p>How far back to look for purchases. Shorter lists are quicker; widen it any time and the 🧭 userscript reads the older part on its next sync.</p>
+        <div class="choices" role="group" aria-label="How far back" id="lookbackSeg">
+          <button data-lookback="30">30 days</button><button data-lookback="90">90 days</button><button data-lookback="180">6 months</button><button data-lookback="365">1 year</button><button data-lookback="0">All</button>
+        </div>
+        <div class="sv-msg" id="lookbackMsg"></div>
+      </div>
+
+      <div class="sv-card">
+        <h3>Visits</h3>
+        <p>Sellers you open from this page glow for a while, so you can see who you've already visited.</p>
+        <div class="sv-row">
+          <label class="lbl">Glow after a visit for
+            <select id="span"><option value="1800">30 min</option><option value="3600">1 hour</option><option value="14400">4 hours</option><option value="86400">1 day</option></select>
+          </label>
+        </div>
+        <div class="sv-row">
+          <button class="btn small" id="resetHl" title="Turn the glow off now; visit times are kept">Reset glow</button>
+          <button class="btn small" id="clearVisits" title="Forget all visit times">Clear visit marks</button>
+        </div>
+      </div>
+
+      <div class="sv-card">
+        <h3>Appearance</h3>
+        <div class="sv-row"><div class="theme" role="group" aria-label="Colour mode">
+      <button data-theme-set="light" title="Light" aria-label="Light mode"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></g></svg></button><button data-theme-set="dark" title="Dark" aria-label="Dark mode"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1Z" fill="currentColor"/></svg></button><button data-theme-set="system" title="Same as this device" aria-label="Same as this device"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17Z" fill="currentColor"/></svg></button>
+        </div><span class="lbl">Light · Dark · Same as this device</span></div>
+      </div>
+
+      <div class="sv-card">
+        <h3>🧭 Userscript</h3>
+        <p id="usStatus"></p>
+        <div class="sv-row" id="resetPosRow"><button class="btn small" id="resetPos">Reset 🧭 position</button></div>
+        <div class="sv-msg" id="usMsg"></div>
+      </div>
+
+      <div class="sv-card">
+        <h3>Help</h3>
+        <p>If something looks wrong, copy this and send it to whoever helps you with Gilded Compass. It never contains your key.</p>
+        <div class="sv-row"><button class="btn small" id="debugBtn">Copy debug sample</button></div>
+        <div class="sv-msg" id="debugMsg"></div>
+        <textarea id="debugOut" readonly hidden aria-label="Debug sample"></textarea>
+      </div>
+
+      <div class="sv-card">
+        <h3>Account</h3>
+        <p>Signed in as <span id="svWho"></span></p>
+        <div class="sv-row">
+          <button class="btn small" id="logoutBtn">Sign out</button>
+          <button class="btn small danger" id="forgetBtn">Delete my data</button>
+        </div>
+      </div>
+
+      <details class="sv-card" id="svTos"><summary>How your data and key are used</summary></details>
+    </section>
   </div>
 </div>
 
@@ -300,6 +382,7 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
   let span = ls.get('span', 3600);
 
   const EMPTY = { sellers: [], purchases: 0, first: 0, last: 0, lastUpload: 0 };
+  let RAW = [], ITEMS = {}, SETTINGS = { lookback: 0 }, ME = null; // as sent by the site; the list is worked out from these
   let DATA = EMPTY;
   const STATUS = new Map(); // id -> { o, b, m, t, name, nt }
   let since = 0, skew = 0, cronAt = 0, lastUpload = 0, statusErr = null, offline = false;
@@ -490,13 +573,24 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
   }
   async function loadData() {
     const d = await getJSON('/api/data');
-    if (d.me) { $('whoName').innerHTML = `<b>${esc(d.me.name || 'player')}</b> [${d.me.uid}]`; }
-    const A = GCAgg.aggregate(d.purchases || [], d.items || {}); // added up here in the browser
-    DATA = { sellers: A.sellers, purchases: A.count, first: A.first, last: A.last, lastUpload: d.lastUpload || 0 };
-    lastUpload = DATA.lastUpload; skew = d.now - Date.now() / 1000;
-    const day = t => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-    $('tagline').textContent = DATA.purchases ? `${fmt(DATA.purchases)} bazaar purchases since ${day(DATA.first)}` : 'Every bazaar you buy from';
+    ME = d.me || null;
+    if (ME) { const who = `<b>${esc(ME.name || 'player')}</b> [${ME.uid}]`; $('whoName').innerHTML = who; $('svWho').innerHTML = who; }
+    RAW = d.purchases || []; ITEMS = d.items || {}; SETTINGS = Object.assign({ lookback: 0 }, d.settings);
+    skew = d.now - Date.now() / 1000;
+    build(d.lastUpload || 0);
   }
+  // Adds up the purchases inside your history range (Settings → Purchase history), here in the browser.
+  function build(up) {
+    const days = Number(SETTINGS.lookback) || 0;
+    const start = days ? serverNow() - days * 86400 : 0;
+    const A = GCAgg.aggregate(start ? RAW.filter(p => p[0] >= start) : RAW, ITEMS);
+    DATA = { sellers: A.sellers, purchases: A.count, first: A.first, last: A.last, lastUpload: up };
+    lastUpload = up;
+    const day = t => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    const range = days ? ` (last ${LOOKBACK_LABEL[days]})` : '';
+    $('tagline').textContent = DATA.purchases ? `${fmt(DATA.purchases)} bazaar purchases since ${day(DATA.first)}${range}` : 'Every bazaar you buy from';
+  }
+  const LOOKBACK_LABEL = { 30: '30 days', 90: '90 days', 180: '6 months', 365: 'year', 0: 'all' };
   async function poll() {
     try {
       const j = await getJSON('/api/status?since=' + since);
@@ -662,11 +756,85 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
   document.querySelectorAll('[data-theme-set]').forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themeSet)));
   setTheme(ls.get('theme', 'system'));
 
+  /* ---------- settings page (⚙): a page of its own inside this one ---------- */
+  function showSettings(on) {
+    document.body.classList.toggle('in-settings', on);
+    $('settingsView').hidden = !on;
+    $('cogBtn').setAttribute('aria-pressed', on);
+    if (on) { fillSettings(); window.scrollTo(0, 0); }
+  }
+  $('cogBtn').addEventListener('click', () => {
+    if (document.body.classList.contains('in-settings')) { history.back(); return; }
+    history.pushState({ gc: 'settings' }, '', '#settings'); showSettings(true);
+  });
+  $('backBtn').addEventListener('click', () => {
+    if (history.state && history.state.gc === 'settings') history.back();
+    else { history.replaceState(null, '', location.pathname + location.search); showSettings(false); }
+  });
+  window.addEventListener('popstate', () => showSettings(location.hash === '#settings' && !!token));
+  function fillSettings() {
+    document.querySelectorAll('[data-lookback]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.lookback) === (Number(SETTINGS.lookback) || 0))));
+    const v = document.documentElement.getAttribute('data-gc-userscript');
+    $('usStatus').innerHTML = v
+      ? `On this device: <b>version ${esc(v)}</b>. It sends your new purchases (every 15 minutes while Torn is open, and when you press Check now).`
+      : 'Not on this device. Purchases are still synced from wherever you have it. To add it here: <a href="https://greasyfork.org/en/scripts/605140-gilded-compass" target="_blank" rel="noopener noreferrer" style="color:var(--gold)">install from Greasy Fork ↗</a>';
+    $('resetPosRow').hidden = !v;
+    $('usMsg').textContent = ''; $('lookbackMsg').textContent = ''; $('debugMsg').textContent = '';
+  }
+  // How far back to look for purchases: saved on the site, so the page and the userscript (on every device) use it.
+  document.querySelectorAll('[data-lookback]').forEach(b => b.addEventListener('click', async () => {
+    const days = Number(b.dataset.lookback), before = Number(SETTINGS.lookback) || 0;
+    if (days === before) return;
+    $('lookbackMsg').textContent = 'Saving…';
+    try {
+      const j = await getJSON('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lookback: days }) });
+      if (j.error) throw new Error(j.error);
+      SETTINGS = Object.assign({ lookback: 0 }, j);
+      build(lastUpload); render(); fillSettings();
+      const wider = !days || (before && days > before);
+      $('lookbackMsg').textContent = `Saved: ${days ? 'the last ' + LOOKBACK_LABEL[days] : 'all your history'}.`
+        + (wider ? ' The 🧭 userscript reads any older purchases on its next sync.' : '');
+      if (wider && document.documentElement.getAttribute('data-gc-userscript')) readLogViaUserscript(1000); // start that now; the list updates as they arrive
+    } catch (e) { $('lookbackMsg').textContent = 'Could not save: ' + e.message; }
+  }));
+  $('resetPos').addEventListener('click', () => {
+    document.dispatchEvent(new Event('gc:resetpos'));
+    $('usMsg').textContent = document.documentElement.getAttribute('data-gc-resetpos')
+      ? 'Done: the 🧭 button goes back to its starting spot next time a Torn page loads.' : 'The userscript did not answer. Update it and try again.';
+  });
+  // Debug sample: what this page sees, plus what the userscript on this device knows (never a key).
+  $('debugBtn').addEventListener('click', () => {
+    const de = document.documentElement;
+    let us = 'not on this device';
+    if (de.getAttribute('data-gc-userscript')) {
+      document.dispatchEvent(new Event('gc:debug')); // answered straight away, so copying still counts as part of this tap
+      try { us = JSON.parse(de.getAttribute('data-gc-debug') || 'null') || 'no answer (update the userscript)'; } catch (e) { us = 'unreadable answer'; }
+    }
+    let checked = 0; for (const s of DATA.sellers) { const x = STATUS.get(s.id); if (x && x.t) checked++; }
+    const sample = {
+      page: { me: ME && ME.uid, lookbackDays: Number(SETTINGS.lookback) || 0, storedPurchases: RAW.length, shownPurchases: DATA.purchases,
+        sellers: DATA.sellers.length, checked, hiddenNoBazaar, first: DATA.first, last: DATA.last, lastUpload, cronAt, error: statusErr,
+        itemTypes: Object.keys(ITEMS).length, screen: [window.innerWidth, window.innerHeight] },
+      userscript: us
+    };
+    const text = JSON.stringify(sample, null, 1).replace(/key=[A-Za-z0-9]+/g, 'key=HIDDEN');
+    const out = $('debugOut'); out.value = text; out.hidden = false;
+    const done = ok => { $('debugMsg').textContent = ok ? 'Copied. Paste it wherever you need it.' : 'Select the text below and copy it.'; if (!ok) { out.focus(); out.select(); } };
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(() => done(true), () => done(legacyCopy(out))); return; } } catch (e) { /* fall through */ }
+    done(legacyCopy(out));
+  });
+  function legacyCopy(ta) { try { ta.focus(); ta.select(); return document.execCommand('copy'); } catch (e) { return false; } }
+  $('svTos').appendChild($('login').querySelector('.tos').cloneNode(true));
+
   /* ---------- sign in ---------- */
-  function showApp(on) { $('login').hidden = on; $('app').hidden = !on; $('who').hidden = !on; }
+  function showApp(on) {
+    $('login').hidden = on; $('app').hidden = !on; $('who').hidden = !on; $('cogBtn').hidden = !on;
+    if (!on) showSettings(false);
+  }
   function signedOut() {
     token = null; ls.set('token', null);
-    DATA = EMPTY; STATUS.clear(); since = 0;
+    DATA = EMPTY; RAW = []; ME = null; STATUS.clear(); since = 0;
+    if (location.hash === '#settings') history.replaceState(null, '', location.pathname + location.search);
     showApp(false);
   }
   async function start() {
@@ -674,6 +842,7 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     try { await loadData(); } catch (e) { if (!token) return; offline = true; }
     await poll();
     render();
+    if (location.hash === '#settings') { history.replaceState({ gc: 'settings' }, '', '#settings'); showSettings(true); }
     if (started) return;
     started = true;
     setInterval(() => { if (!document.hidden && token) poll(); }, 8000);
@@ -712,8 +881,14 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
 
   /* ---------- start ---------- */
   // Opened from the 🧭 button: the sign-in token arrives after # (never sent to any server), then is removed from the address.
-  const hm = /[#&]t=([A-Za-z0-9_-]{20,100})/.exec(location.hash);
-  if (hm) { token = hm[1]; ls.set('token', token); history.replaceState(null, '', location.pathname + location.search); }
+  function tokenFromAddress() {
+    const hm = /[#&]t=([A-Za-z0-9_-]{20,100})/.exec(location.hash);
+    if (!hm) return false;
+    token = hm[1]; ls.set('token', token); history.replaceState(null, '', location.pathname + location.search);
+    return true;
+  }
+  tokenFromAddress();
+  window.addEventListener('hashchange', () => { if (tokenFromAddress()) start(); }); // a 🧭 link opened in a tab that already shows this page
   if (token) start(); else showApp(false);
 })();
 </script>

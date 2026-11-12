@@ -59,6 +59,16 @@ Playwright: sign-in screen, desktop, phone (no sideways scroll), arriving from �
 - Self-repair instead of a Re-send button: at the start of a sync, if the site holds 0 purchases (`GET /api/me` → `purchases`) but this
   device has synced before, the whole log is read again.
 
+## Settings (⚙ on the site, signed in only)
+A page inside the main page (`#settings`, browser Back works): Purchase history (how far back: 30 / 90 / 180 / 365 days or All),
+Visits (glow time, Reset glow, Clear visit marks), Appearance, 🧭 Userscript (on this device? version; Reset 🧭 position),
+Help (Copy debug sample: page facts plus the userscript's sample via `gc:debug`, never a key), Account (Sign out, Delete my data),
+and the data/key disclosure.
+- `lookback` is stored per player on the site (`meta` key `set:<uid>`, `GET/POST /api/settings`, also in `/api/data` and `/api/me`).
+  The page only counts purchases inside the range. The userscript reads only that far back on the first sync; when the range is
+  widened it reads just the older stretch (`state.oldest`, resume kind `older`). Narrowing never deletes anything.
+- The userscript's own box is now only the key and sign-in; everything else lives here.
+
 ## Repo hygiene
 - The repo was recreated on 2026-11-12 so no old commit carries a personal email address. Commits use no-reply addresses only
   (GitHub setting "Keep my email addresses private" is on). Never commit keys, tokens, passwords or email addresses.

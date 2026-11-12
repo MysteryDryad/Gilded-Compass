@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.3.7
+// @version      0.4.0
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -23,7 +23,8 @@
  * GILDED COMPASS (Torn PDA and Tampermonkey/Violentmonkey)
  *
  * What it does
- * - 🧭 button on Torn: tap opens the Gilded Compass site, signed in as you. Hold it (or use the Tampermonkey menu) for settings.
+ * - 🧭 button on Torn: tap opens the Gilded Compass site, signed in as you. Hold it (or use the Tampermonkey menu) for your key.
+ *   Everything else (how far back to look, debug sample, delete data) is under ⚙ on the Gilded Compass page.
  *   Drag it anywhere (phone and computer); where you leave it is remembered. It steps aside while a Torn pop-up (chat, menu) covers it.
  * - On the Gilded Compass page, "Check now" asks this script to read your log for new purchases first (no button there).
  * - In the background (when you tap 🧭, and every 15 minutes while Torn is open) it reads YOUR new "Bazaar buy"
@@ -41,7 +42,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.3.7'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.4.0'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -49,7 +50,7 @@
 
   // Torn PDA keeps each website's storage apart, but its PDA_storage is shared by every page this script runs on
   // (as in Arbitrage). The few things the Gilded Compass page also needs are kept there too.
-  const SHARED = ['apikey', 'token', 'me', 'sync'];
+  const SHARED = ['apikey', 'token', 'me', 'sync', 'btnpos', 'btnpos_phone'];
   const pda = () => (typeof PDA_storage !== 'undefined' && PDA_storage && typeof PDA_storage.get === 'function' ? PDA_storage : null);
   const cache = {};
   async function loadShared() {
@@ -197,11 +198,12 @@
   let state = loadState();
   const save = () => sset('state', state);
   // The small part another page (the Gilded Compass page in PDA) needs to carry on where this one stopped.
-  const shareSync = () => sset('sync', { lastSync: state.lastSync, logIds: state.logIds, sent: state.sent, syncedAt: state.syncedAt });
+  const shareSync = () => sset('sync', { lastSync: state.lastSync, oldest: state.oldest, logIds: state.logIds, sent: state.sent, syncedAt: state.syncedAt });
   function mergeShared() {
     const sh = sget('sync', null); if (!sh) return;
     if (!state.resume && (sh.lastSync || 0) > (state.lastSync || 0)) state.lastSync = sh.lastSync;
     if (!(state.logIds && state.logIds.length) && sh.logIds) state.logIds = sh.logIds;
+    if (!state.resume && sh.oldest != null && (state.oldest == null || sh.oldest < state.oldest)) state.oldest = sh.oldest;
     state.sent = Math.max(state.sent || 0, sh.sent || 0);
     state.syncedAt = Math.max(state.syncedAt || 0, sh.syncedAt || 0);
   }
@@ -216,14 +218,15 @@
     return state.logIds;
   }
   /* ===================== sync: log -> site ===================== */
-  // Newest first. The first sync reads all history; later ones only read entries newer than the last one.
+  // Reads one stretch of your log, newest first, from `toStart` (null = now) back to `from` (0 = the very beginning).
+  // kind 'new' = entries since the last sync; 'older' = an older stretch, read after the history range was widened (⚙ on the site).
   // Progress is saved every page, so a stopped read carries on next time.
-  // onChunk: called whenever 1,000 purchases are waiting, so the site fills in while a long first read is still going.
-  async function readLog(onChunk) {
+  // onChunk: called whenever 1,000 purchases are waiting, so the site fills in while a long read is still going.
+  async function readRange(from, toStart, kind, onChunk) {
     const ids = await ensureLogIds();
-    const r = state.resume;
-    const from = r ? r.from : (state.lastSync ? state.lastSync + 1 : 0);
-    let to = r ? r.to : null, newest = r ? r.newest : (state.lastSync || 0), added = 0, seen = (r && r.seen) || {};
+    const r = state.resume && (state.resume.kind || 'new') === kind ? state.resume : null;
+    if (r) from = r.from;
+    let to = r ? r.to : toStart, newest = r ? r.newest : (kind === 'new' ? state.lastSync || 0 : 0), added = r ? r.added || 0 : 0, seen = (r && r.seen) || {};
     const sellers = new Set();
     for (;;) {
       const params = { log: ids.join(','), limit: 100, sort: 'desc' };
@@ -248,15 +251,15 @@
       // ids at the page edge can repeat on the next page: remember them so they are not counted twice
       seen = {}; arr.forEach(e => { if (Number(e.timestamp) === oldest) seen[String(e.id)] = 1; });
       to = oldest;
-      state.resume = { from, to, newest, seen };
+      state.resume = { kind, from, to, newest, seen, added };
       save();
       setStatus(`Reading your log… ${added.toLocaleString('en-US')} purchases found so far`);
       if (onChunk && Object.keys(state.pending).length >= CHUNK) await onChunk();
       await sleep(PAUSE);
     }
-    state.lastSync = newest; state.resume = null;
+    state.resume = null;
     save();
-    return { added, sellers: [...sellers] };
+    return { added, sellers: [...sellers], newest, from };
   }
   async function sendToSite() {
     const ids = Object.keys(state.pending);
@@ -272,14 +275,15 @@
     }
   }
 
-  // How many of your purchases the site holds (null if it could not say).
-  async function siteCount() {
+  // What the site knows about you: { purchases, settings: { lookback } } (null if it could not say).
+  async function siteMe() {
     let r = await siteCall('GET', '/api/me', null, await token());
     if (r.status === 401) { sset('token', ''); r = await siteCall('GET', '/api/me', null, await signIn()); }
-    try { const j = JSON.parse(r.text); return r.status === 200 && typeof j.purchases === 'number' ? j.purchases : null; } catch (e) { return null; }
+    try { const j = JSON.parse(r.text); return r.status === 200 ? j : null; } catch (e) { return null; }
   }
   let running = false;
-  // Reads new log entries and sends them. Returns { added, sellers } (or { busy } / { error }).
+  // Reads new log entries (and, if the history range was widened, the older stretch) and sends them.
+  // Returns { added, sellers } (or { busy } / { error }).
   async function run(why) {
     if (running) return { busy: true };
     if (!cfg.ready()) return { error: 'Set up the 🧭 userscript on Torn first.' };
@@ -289,14 +293,31 @@
     try {
       try { await loadShared(); } catch (e) { /* fine without */ }
       mergeShared(); // carry on from where another page (e.g. the Gilded Compass page in PDA) got to
-      // Self-repair: if the site holds none of your purchases (for example after "Delete my data"), read the whole log again.
-      if (state.lastSync && !state.resume && !Object.keys(state.pending).length && await siteCount() === 0) { state.lastSync = 0; save(); }
-      const { added, sellers } = await readLog(sendToSite);
+      const site = await siteMe();
+      const days = site && site.settings ? Number(site.settings.lookback) || 0 : 0;
+      const start = days ? Math.floor(Date.now() / 1000) - days * 86400 : 0; // how far back to look (0 = all your history)
+      if (state.lastSync && state.oldest == null) state.oldest = 0; // earlier versions always read everything
+      // Self-repair: if the site holds none of your purchases (for example after "Delete my data"), read the log again.
+      if (state.lastSync && !state.resume && !Object.keys(state.pending).length && site && site.purchases === 0) { state.lastSync = 0; state.oldest = null; save(); }
+      let added = 0, sellers = [];
+      const take = x => { added += x.added; sellers = sellers.concat(x.sellers); };
+      if (state.resume && state.resume.kind === 'older') { const x = await readRange(0, null, 'older', sendToSite); take(x); state.oldest = x.from; }
+      if (!state.lastSync) { // first read: back to the start of your history range
+        const x = await readRange(start, null, 'new', sendToSite); take(x);
+        if (x.newest) state.lastSync = x.newest;
+        state.oldest = start;
+      } else {
+        const x = await readRange(state.lastSync + 1, null, 'new', sendToSite); take(x);
+        if (x.newest > state.lastSync) state.lastSync = x.newest;
+        if (state.oldest != null && start < state.oldest) { // range widened on the site: read the older stretch too
+          const y = await readRange(start, state.oldest - 1, 'older', sendToSite); take(y);
+          state.oldest = start;
+        }
+      }
       if (Object.keys(state.pending).length) await sendToSite();
-      else await token();
-      state.lastError = null; state.syncedAt = Date.now(); shareSync(); setStatus('');
+      state.lastError = null; state.syncedAt = Date.now(); save(); shareSync(); setStatus('');
       setBtn('ok', added ? `Sent ${added} new purchase${added === 1 ? '' : 's'}` : 'Up to date');
-      return { added, sellers };
+      return { added, sellers: [...new Set(sellers)] };
     } catch (e) {
       state.lastError = hideKey(e.message || e);
       if (e.setup || e.code === 2 || e.code === 16) state.needsSetup = true;
@@ -305,6 +326,13 @@
     } finally {
       state.lastRun = Date.now(); save(); sset('lock', 0); running = false;
     }
+  }
+  // For "Copy debug sample" on the Gilded Compass page (never contains a key).
+  function debugSample() {
+    return { version: VERSION, inPDA: IN_PDA, usingPdaKey: IN_PDA && !sget('apikey', ''), signedIn: !!sget('token', ''), logTypes: state.logTypesSeen || null,
+      logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
+      oldest: state.oldest, resume: state.resume ? Object.assign({}, state.resume, { seen: undefined }) : null, lastError: state.lastError,
+      rawSamples: state.rawSamples, badSamples: state.badSamples, parsedSample: state.rawSamples.map(parseBuy) };
   }
 
   /* ===================== UI: the 🧭 button and a one-time setup card ===================== */
@@ -327,11 +355,6 @@
   #gc-setup .gc-note{color:#9aa3b5;font-size:12px;margin:8px 0 0}
   #gc-setup .gc-err{color:#ff8a65;margin-top:8px}
   #gc-setup .gc-ok{color:#4fd184;margin-top:8px}
-  #gc-setup details{margin-top:12px;border-top:1px solid #26324f;padding-top:8px}
-  #gc-setup summary{cursor:pointer;color:#9aa3b5;font-size:13px;list-style:none}
-  #gc-setup summary::-webkit-details-marker{display:none}
-  #gc-setup summary:before{content:"▸ ";color:#d4af37}
-  #gc-setup details[open] summary:before{content:"▾ "}
   `;
   let msg = { text: '', ok: true };
 
@@ -354,10 +377,7 @@
       <div id="gc-msg">${msg.text ? `<div class="${msg.ok ? 'gc-ok' : 'gc-err'}">${esc(msg.text)}</div>` : state.lastError ? `<div class="gc-err">Last sync: ${esc(state.lastError)}</div>` : ''}</div>
       <button data-act="save" class="gc-gold">Save and sign in</button>
       <p class="gc-note" id="gc-status">${statusText()}</p>
-      <details>
-        <summary>More options</summary>
-        <button data-act="debug">Copy debug sample</button> <button data-act="resetpos">Reset 🧭 position</button>
-      </details>
+      <p class="gc-note">How far back to look, debug sample and deleting your data: <b>⚙</b> on your Gilded Compass page.</p>
       <p class="gc-note">Read-only: never acts in the game. Your key stays on this device; it goes to api.torn.com, and once to the Gilded Compass site to confirm who you are (not stored there).</p>`;
   }
   function statusText() {
@@ -412,41 +432,6 @@
       return;
     }
     if (act === 'open') { setTimeout(() => { document.getElementById('gc-setup').hidden = true; }, 300); return; } // the link itself opens the site
-    if (act === 'resetpos') {
-      sset(posKey(), null);
-      const b = document.getElementById('gc-btn'); if (b) placeBtn(b, defaultPos());
-      el.textContent = 'Moved back ✔'; setTimeout(() => { el.textContent = 'Reset 🧭 position'; }, 2000);
-      return;
-    }
-    if (act === 'debug') {
-      const sample = { version: VERSION, inPDA: IN_PDA, usingPdaKey: IN_PDA && !sget('apikey', ''), signedIn: !!sget('token', ''), logTypes: state.logTypesSeen || null,
-        logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
-        resume: state.resume, lastError: state.lastError, itemSample: state.itemSample || null,
-        rawSamples: state.rawSamples, badSamples: state.badSamples, parsedSample: state.rawSamples.map(parseBuy) };
-      const ok = await copyText(hideKey(JSON.stringify(sample, null, 1)));
-      el.textContent = ok ? 'Copied ✔' : 'Copy failed';
-      setTimeout(() => { el.textContent = 'Copy debug sample'; }, 2000);
-    }
-  }
-  function copyText(text) {
-    try { if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text).then(() => true).catch(() => legacyCopy(text)); }
-    catch (e) { /* fall through */ }
-    return Promise.resolve(legacyCopy(text));
-  }
-  function legacyCopy(text) {
-    try { const t = document.createElement('textarea'); t.value = text; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.select(); const ok = document.execCommand('copy'); t.remove(); return ok; }
-    catch (e) { return false; }
-  }
-
-  // Tap: open the site in a new tab (and sync). Not set up yet, or a problem: settings.
-  const siteUrl = () => { const t = sget('token', ''); return cfg.site() + '/' + (t ? '#t=' + t : ''); }; // the token after # never reaches any server log
-  // Opens the site in a new tab (or in a tab opened earlier, while the tap was still fresh). Returns false if the phone blocked it.
-  function openSite(tab) {
-    const url = siteUrl();
-    if (tab && !tab.closed) { try { tab.location.href = url; tab.opener = null; return true; } catch (e) { /* fall through */ } }
-    const w = window.open(url, '_blank');
-    if (w) { try { w.opener = null; } catch (e) { /* ignore */ } return true; }
-    return false;
   }
   // When a new tab can't be opened automatically, a plain link always works.
   function showOpenLink(text) {
@@ -546,6 +531,8 @@
   function initSite() {
     const de = document.documentElement;
     de.setAttribute('data-gc-userscript', VERSION);
+    document.addEventListener('gc:debug', () => { de.setAttribute('data-gc-debug', hideKey(JSON.stringify(debugSample()))); });
+    document.addEventListener('gc:resetpos', () => { sset('btnpos', null); sset('btnpos_phone', null); de.setAttribute('data-gc-resetpos', String(Date.now())); });
     document.addEventListener('gc:sync', async () => {
       const res = await run('tap');
       de.setAttribute('data-gc-sync-result', JSON.stringify(res || {}));

@@ -169,6 +169,27 @@ async function login(req, env) {
   return json({ token, uid, name: p.name || null });
 }
 
+/* ---------- the user's settings ---------- */
+// lookback: how many days back to look for purchases (0 = all of your history). Read by the page and by the userscript.
+const LOOKBACK_CHOICES = [0, 30, 90, 180, 365];
+const DEFAULT_SETTINGS = { lookback: 0 };
+async function getSettings(env, uid) {
+  const v = firstV(await metaGet(env, 'set:' + uid).run());
+  try { return Object.assign({}, DEFAULT_SETTINGS, v ? JSON.parse(v) : {}); } catch (e) { return Object.assign({}, DEFAULT_SETTINGS); }
+}
+async function putSettings(req, env, me) {
+  if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
+  let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
+  const cur = await getSettings(env, me.uid);
+  if (body && body.lookback !== undefined) {
+    const d = Number(body.lookback);
+    if (!LOOKBACK_CHOICES.includes(d)) return json({ error: 'lookback must be one of ' + LOOKBACK_CHOICES.join(', ') }, 400);
+    cur.lookback = d;
+  }
+  await metaSet(env, 'set:' + me.uid, JSON.stringify(cur)).run();
+  return json(cur);
+}
+
 /* ---------- the user's data ---------- */
 // Raw purchases [ts, seller, items, cost_each, cost_total] plus Torn's item list; the browser adds them up.
 async function getData(env, me) {
@@ -182,9 +203,10 @@ async function getData(env, me) {
     if (!r || r.n < CHUNK_ROWS) break;
     after = r.last;
   }
-  const [items, u] = await env.DB.batch([metaGet(env, 'items'), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid)]);
+  const [items, u, set] = await env.DB.batch([metaGet(env, 'items'), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid), metaGet(env, 'set:' + me.uid)]);
+  const settings = Object.assign({}, DEFAULT_SETTINGS, JSON.parse(firstV(set) || '{}'));
   return rawJson(`{"me":${JSON.stringify(me)},"purchases":[${parts.filter(Boolean).join(',')}],"items":${firstV(items) || '{}'},` +
-    `"lastUpload":${Number(firstV(u)) || 0},"now":${now()}}`);
+    `"settings":${JSON.stringify(settings)},"lastUpload":${Number(firstV(u)) || 0},"now":${now()}}`);
 }
 // Only this user's sellers, only rows changed since `since`.
 async function getStatus(env, me, since) {
@@ -272,7 +294,8 @@ async function forget(env, me) {
     env.DB.prepare('DELETE FROM purchases WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM user_sellers WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM sessions WHERE uid = ?1').bind(me.uid),
-    env.DB.prepare('DELETE FROM users WHERE uid = ?1').bind(me.uid)
+    env.DB.prepare('DELETE FROM users WHERE uid = ?1').bind(me.uid),
+    env.DB.prepare('DELETE FROM meta WHERE k = ?1 OR k = ?2').bind('set:' + me.uid, 'cool:' + me.uid)
   ]);
   return json({ ok: true });
 }
@@ -309,7 +332,7 @@ export default {
       if (!me) return json({ error: 'Please sign in' }, 401);
       if (p === '/api/me' && m === 'GET') {
         const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM purchases WHERE uid = ?1').bind(me.uid).first();
-        return json(Object.assign({}, me, { purchases: c ? c.n : 0 }));
+        return json(Object.assign({}, me, { purchases: c ? c.n : 0, settings: await getSettings(env, me.uid) }));
       }
       if (p === '/api/data' && m === 'GET') return getData(env, me);
       if (p === '/api/status' && m === 'GET') return getStatus(env, me, Math.max(0, Number(url.searchParams.get('since')) || 0));
@@ -320,6 +343,8 @@ export default {
         return json({ ok: true });
       }
       if (p === '/api/forget' && m === 'POST') return forget(env, me);
+      if (p === '/api/settings' && m === 'GET') return json(await getSettings(env, me.uid));
+      if (p === '/api/settings' && m === 'POST') return putSettings(req.clone(), env, me);
       if (p === '/api/probe' && m === 'GET') return probe(env, me);
       return json({ error: 'Not found' }, 404);
     });
