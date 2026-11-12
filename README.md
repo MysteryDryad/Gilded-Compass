@@ -7,4 +7,6 @@ Sellers without a bazaar are hidden.
 - **Userscript** (Torn PDA / Tampermonkey): reads only your *Bazaar buy* log and sends it to the site. The 🧭 button on Torn opens the site, signed in as you.
 - **Website**: free Cloudflare Worker. Sign in with your own Torn key (it is not stored); you only ever see your own purchases.
 
+**Install:** https://greasyfork.org/en/scripts/605140-gilded-compass (Tampermonkey or Torn PDA). Updates arrive automatically.
+
 Read-only: nothing here ever acts in the game. Developer notes: [HANDOFF.md](HANDOFF.md).

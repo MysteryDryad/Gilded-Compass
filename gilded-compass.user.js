@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.3.1
+// @version      0.3.2
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -13,6 +13,8 @@
 // @grant        GM_registerMenuCommand
 // @connect      api.torn.com
 // @connect      workers.dev
+// @updateURL    https://update.greasyfork.org/scripts/605140/Gilded%20Compass.user.js
+// @downloadURL  https://update.greasyfork.org/scripts/605140/Gilded%20Compass.user.js
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -36,7 +38,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.3.1'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.3.2'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open

@@ -57,4 +57,5 @@ Playwright: sign-in screen, desktop, phone (no sideways scroll), arriving from ð
 1. D1: Storage & Databases > D1 > Create `gilded-compass`; put its id in `wrangler.toml` (`database_id`).
 2. Workers & Pages > Create > Import a repository > this repo, branch `main` (Workers Builds deploys on every push).
 3. Worker > Settings > Variables and Secrets: `TORN_API_KEY` (a Public-only key).
-4. Put the workers.dev address in `SITE` in the userscript and push. Updates reach users through Greasy Fork's GitHub webhook (needs a public repo, like Arbitrage).
+4. Userscript updates: GitHub webhook -> Greasy Fork (https://greasyfork.org/en/scripts/605140-gilded-compass) -> Tampermonkey / PDA.
+   Users only get an update when `@version` goes up, so bump it (and `VERSION`) with every userscript change.
