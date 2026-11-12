@@ -2,6 +2,10 @@ name = "gilded-compass"
 main = "src/worker.js"
 compatibility_date = "2025-09-01"
 
+# The site lives at https://gilded-compass.mysterydryad.workers.dev. No preview copies (they would share the real database).
+workers_dev = true
+preview_urls = false
+
 # The page is served straight from public/. Only /api/* runs the Worker code.
 [assets]
 directory = "./public"

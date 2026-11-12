@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.3.0
+// @version      0.3.1
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -36,7 +36,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.3.0'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.3.1'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -82,7 +82,7 @@
   }
 
   /* ===================== settings ===================== */
-  const SITE = 'https://gilded-compass.PUT-SUBDOMAIN-HERE.workers.dev'; // the Gilded Compass website, set after the first deploy
+  const SITE = 'https://gilded-compass.mysterydryad.workers.dev'; // the Gilded Compass website
   const cfg = {
     key: () => sget('apikey', '') || (IN_PDA ? PDA_KEY : ''),
     site: () => String(sget('site', '') || SITE).replace(/\/+$/, ''), // 'site' in storage only overrides it for testing

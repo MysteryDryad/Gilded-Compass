@@ -14,7 +14,7 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 ## Pieces
 | File | What it is |
 |---|---|
-| `gilded-compass.user.js` | Userscript (Torn PDA + Tampermonkey). Settings: the Torn key only (Custom with log, or PDA's key). Signs in to the site, reads the bazaar-buy log (incremental, resumable) and POSTs purchases. 🧭 tap opens `SITE/#t=<token>` (signed in); hold for settings. **Set `SITE` after the first deploy.** |
+| `gilded-compass.user.js` | Userscript (Torn PDA + Tampermonkey). Settings: the Torn key only (Custom with log, or PDA's key). Signs in to the site, reads the bazaar-buy log (incremental, resumable) and POSTs purchases. 🧭 tap opens `SITE/#t=<token>` (signed in); hold for settings. Site: https://gilded-compass.mysterydryad.workers.dev |
 | `src/worker.js` | Worker for `/api/*` only (the page is served straight from `public/`). |
 | `src/logic.mjs` | Pure Worker logic (bazaar reply parsing, scheduling, validation, tokens). Tested in `test.js`. |
 | `public/aggregate.js` | Totals per seller and item type, run **in the browser** (free Workers get ~10 ms CPU per request). Tested in `test.js`: 23k purchases in ~25 ms. |
