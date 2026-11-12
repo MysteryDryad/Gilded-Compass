@@ -48,6 +48,17 @@ With many users the 36 calls a minute are shared, so checks just get less freque
 Playwright: sign-in screen, desktop, phone (no sideways scroll), arriving from 🧭 signed in, and the userscript end to end.
 **Not yet tested against real Torn data**: on the first real run, use the userscript's "Copy debug sample" and `/api/probe`.
 
+## Check now and the userscript
+- The userscript also runs on the Gilded Compass page (second `@match`), with no button there. It marks the page with
+  `data-gc-userscript` and listens for a `gc:sync` event; when done it writes `data-gc-sync-result` ({added, sellers} or {error}/{busy})
+  and fires `gc:synced`.
+- The page's **Check now**: if the userscript is there, ask it to read the log (waits up to 20 s), reload the data if anything was added,
+  then `POST /api/check-now` with the new sellers first, then the ones on screen (30 max). Without the userscript it only checks bazaars.
+- Torn PDA keeps each site's storage separate, so `apikey`, `token`, `me` and `sync` ({lastSync, logIds, sent, syncedAt}) are also kept in
+  `PDA_storage` (shared by every page, as in Arbitrage) and merged at the start of each sync.
+- Self-repair instead of a Re-send button: at the start of a sync, if the site holds 0 purchases (`GET /api/me` → `purchases`) but this
+  device has synced before, the whole log is read again.
+
 ## Repo hygiene
 - The repo was recreated on 2026-11-12 so no old commit carries a personal email address. Commits use no-reply addresses only
   (GitHub setting "Keep my email addresses private" is on). Never commit keys, tokens, passwords or email addresses.

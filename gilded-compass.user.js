@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.3.4
+// @version      0.3.5
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
 // @supportURL   https://github.com/MysteryDryad/Gilded-Compass/issues
 // @match        https://www.torn.com/*
+// @match        https://gilded-compass.mysterydryad.workers.dev/*
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -24,6 +25,7 @@
  * What it does
  * - 🧭 button on Torn: tap opens the Gilded Compass site, signed in as you. Hold it (or use the Tampermonkey menu) for settings.
  *   Drag it anywhere (phone and computer); where you leave it is remembered.
+ * - On the Gilded Compass page, "Check now" asks this script to read your log for new purchases first (no button there).
  * - In the background (when you tap 🧭, and every 15 minutes while Torn is open) it reads YOUR new "Bazaar buy"
  *   log entries (bazaar purchases only) and sends them to the site, where only you can see them.
  *
@@ -39,13 +41,30 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.3.4'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.3.5'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
   const CHUNK = 1000;               // purchases per upload
 
+  // Torn PDA keeps each website's storage apart, but its PDA_storage is shared by every page this script runs on
+  // (as in Arbitrage). The few things the Gilded Compass page also needs are kept there too.
+  const SHARED = ['apikey', 'token', 'me', 'sync'];
+  const pda = () => (typeof PDA_storage !== 'undefined' && PDA_storage && typeof PDA_storage.get === 'function' ? PDA_storage : null);
+  const cache = {};
+  async function loadShared() {
+    const n = pda(); if (!n) return;
+    for (const k of SHARED) {
+      try { const v = await n.get(NS + k, null); if (v != null && v !== '') cache[k] = typeof v === 'string' ? JSON.parse(v) : v; }
+      catch (e) { /* keep this page's own copy */ }
+    }
+    for (const k of SHARED) if (!(k in cache)) { const v = sgetLocal(k, null); if (v != null) sset(k, v); } // first run after updating: copy across
+  }
   function sget(k, d) {
+    if (k in cache) return cache[k] == null || cache[k] === '' ? d : cache[k];
+    return sgetLocal(k, d);
+  }
+  function sgetLocal(k, d) {
     try {
       const v = hasGM ? GM_getValue(NS + k) : localStorage.getItem(NS + k);
       if (v == null || v === '') return d;
@@ -53,6 +72,11 @@
     } catch (e) { return d; }
   }
   function sset(k, v) {
+    const n = SHARED.includes(k) && pda();
+    if (n) {
+      cache[k] = v;
+      try { Promise.resolve(n.set(NS + k, JSON.stringify(v))).catch(() => {}); } catch (e) { /* ignore */ }
+    }
     try { const s = JSON.stringify(v); if (hasGM) GM_setValue(NS + k, s); else localStorage.setItem(NS + k, s); return true; }
     catch (e) { console.warn('[GC] save failed', e); return false; }
   }
@@ -172,6 +196,15 @@
   }
   let state = loadState();
   const save = () => sset('state', state);
+  // The small part another page (the Gilded Compass page in PDA) needs to carry on where this one stopped.
+  const shareSync = () => sset('sync', { lastSync: state.lastSync, logIds: state.logIds, sent: state.sent, syncedAt: state.syncedAt });
+  function mergeShared() {
+    const sh = sget('sync', null); if (!sh) return;
+    if (!state.resume && (sh.lastSync || 0) > (state.lastSync || 0)) state.lastSync = sh.lastSync;
+    if (!(state.logIds && state.logIds.length) && sh.logIds) state.logIds = sh.logIds;
+    state.sent = Math.max(state.sent || 0, sh.sent || 0);
+    state.syncedAt = Math.max(state.syncedAt || 0, sh.syncedAt || 0);
+  }
 
   async function ensureLogIds() {
     if (state.logIds && state.logIds.length) return state.logIds;
@@ -190,6 +223,7 @@
     const r = state.resume;
     const from = r ? r.from : (state.lastSync ? state.lastSync + 1 : 0);
     let to = r ? r.to : null, newest = r ? r.newest : (state.lastSync || 0), added = 0, seen = (r && r.seen) || {};
+    const sellers = new Set();
     for (;;) {
       const params = { log: ids.join(','), limit: 100, sort: 'desc' };
       if (from) params.from = from;
@@ -206,7 +240,7 @@
         fresh++;
         if (state.rawSamples.length < 3) state.rawSamples.push(e);
         const b = parseBuy(e);
-        if (b) { state.pending[id] = b; added++; }
+        if (b) { state.pending[id] = b; added++; sellers.add(b.s); }
         else { state.badCount++; if (state.badSamples.length < 5) state.badSamples.push(e); }
       });
       if (arr.length < 100 || !fresh || oldest === Infinity) break;
@@ -219,7 +253,7 @@
     }
     state.lastSync = newest; state.resume = null;
     save();
-    return added;
+    return { added, sellers: [...sellers] };
   }
   async function sendToSite() {
     const ids = Object.keys(state.pending);
@@ -235,22 +269,36 @@
     }
   }
 
+  // How many of your purchases the site holds (null if it could not say).
+  async function siteCount() {
+    let r = await siteCall('GET', '/api/me', null, await token());
+    if (r.status === 401) { sset('token', ''); r = await siteCall('GET', '/api/me', null, await signIn()); }
+    try { const j = JSON.parse(r.text); return r.status === 200 && typeof j.purchases === 'number' ? j.purchases : null; } catch (e) { return null; }
+  }
   let running = false;
+  // Reads new log entries and sends them. Returns { added, sellers } (or { busy } / { error }).
   async function run(why) {
-    if (running || !cfg.ready()) return;
+    if (running) return { busy: true };
+    if (!cfg.ready()) return { error: 'Set up the 🧭 userscript on Torn first.' };
     const lock = sget('lock', 0);
-    if (Date.now() - lock < 3 * 60000 && why !== 'tap') return; // another Torn tab is syncing
+    if (Date.now() - lock < 3 * 60000 && why !== 'tap') return { busy: true }; // another Torn tab is syncing
     running = true; sset('lock', Date.now()); setBtn('busy');
     try {
-      const added = await readLog();
+      try { await loadShared(); } catch (e) { /* fine without */ }
+      mergeShared(); // carry on from where another page (e.g. the Gilded Compass page in PDA) got to
+      // Self-repair: if the site holds none of your purchases (for example after "Delete my data"), read the whole log again.
+      if (state.lastSync && !state.resume && !Object.keys(state.pending).length && await siteCount() === 0) { state.lastSync = 0; save(); }
+      const { added, sellers } = await readLog();
       if (Object.keys(state.pending).length) await sendToSite();
       else await token();
-      state.lastError = null; state.syncedAt = Date.now();
+      state.lastError = null; state.syncedAt = Date.now(); shareSync();
       setBtn('ok', added ? `Sent ${added} new purchase${added === 1 ? '' : 's'}` : 'Up to date');
+      return { added, sellers };
     } catch (e) {
       state.lastError = hideKey(e.message || e);
       if (e.setup || e.code === 2 || e.code === 16) state.needsSetup = true;
       setBtn('err', state.lastError);
+      return { error: state.lastError };
     } finally {
       state.lastRun = Date.now(); save(); sset('lock', 0); running = false;
     }
@@ -304,7 +352,7 @@
       <p class="gc-note">${state.sent ? `${state.sent.toLocaleString('en-US')} purchases sent so far` : 'Nothing sent yet'}${state.syncedAt ? ', last sync ' + new Date(state.syncedAt).toLocaleString() : ''}.</p>
       <details>
         <summary>More options</summary>
-        <button data-act="resend">Re-send all purchases</button> <button data-act="debug">Copy debug sample</button> <button data-act="resetpos">Reset 🧭 position</button>
+        <button data-act="debug">Copy debug sample</button> <button data-act="resetpos">Reset 🧭 position</button>
       </details>
       <p class="gc-note">Read-only: never acts in the game. Your key stays on this device; it goes to api.torn.com, and once to the Gilded Compass site to confirm who you are (not stored there).</p>`;
   }
@@ -337,14 +385,6 @@
         run('tap');
       } catch (e) { setMsg(hideKey(e.message || e), false); }
       el.disabled = false; el.textContent = 'Save and sign in';
-      return;
-    }
-    if (act === 'resend') {
-      if (el.getAttribute('data-sure') !== '1') { el.setAttribute('data-sure', '1'); el.textContent = 'Tap again to re-read your whole log'; return; }
-      state.lastSync = 0; state.resume = null; state.rawSamples = []; state.badSamples = []; state.badCount = 0; save();
-      setMsg('Re-reading everything in the background (the site ignores duplicates).', true);
-      el.removeAttribute('data-sure'); el.textContent = 'Re-send all purchases';
-      run('tap');
       return;
     }
     if (act === 'resetpos') {
@@ -437,8 +477,21 @@
       setBtn(state.lastError ? 'err' : 'ok', state.lastError || '');
     }
   }
-  function init() {
+  // On the Gilded Compass page: no button. "Check now" there asks this script to read your log first.
+  function initSite() {
+    const de = document.documentElement;
+    de.setAttribute('data-gc-userscript', VERSION);
+    document.addEventListener('gc:sync', async () => {
+      const res = await run('tap');
+      de.setAttribute('data-gc-sync-result', JSON.stringify(res || {}));
+      document.dispatchEvent(new Event('gc:synced'));
+    });
+  }
+  async function init() {
     if (window.top !== window.self) return; // not inside Torn's iframes
+    try { await loadShared(); } catch (e) { /* fine without */ }
+    state = loadState(); mergeShared();
+    if (location.origin === cfg.site()) { initSite(); return; }
     mount();
     setInterval(mount, 3000); // Torn sometimes rebuilds the page
     if (typeof GM_registerMenuCommand === 'function') GM_registerMenuCommand('Gilded Compass settings', openSetup);

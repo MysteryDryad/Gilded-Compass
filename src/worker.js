@@ -307,7 +307,10 @@ export default {
       if (p === '/api/login' && m === 'POST') return login(req.clone(), env);
       const me = await signedIn(req, env);
       if (!me) return json({ error: 'Please sign in' }, 401);
-      if (p === '/api/me' && m === 'GET') return json(me);
+      if (p === '/api/me' && m === 'GET') {
+        const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM purchases WHERE uid = ?1').bind(me.uid).first();
+        return json(Object.assign({}, me, { purchases: c ? c.n : 0 }));
+      }
       if (p === '/api/data' && m === 'GET') return getData(env, me);
       if (p === '/api/status' && m === 'GET') return getStatus(env, me, Math.max(0, Number(url.searchParams.get('since')) || 0));
       if (p === '/api/check-now' && m === 'POST') return checkNow(req.clone(), env, me, url);

@@ -164,7 +164,8 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
   .grid { grid-template-columns: 1fr; gap: 8px; }
   .cardx { padding: 10px 12px 8px; gap: 5px; }
   .sid, .meter, .stats .spent, .cf .visit { display: none; }
-  #checkMsg { display: none; }
+  #checkMsg:not(:empty) { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 20; padding: 10px 14px; border-radius: 14px;
+    background: var(--card); border: 1px solid var(--gold2); color: var(--text); box-shadow: var(--shadow); text-align: center; font-size: 13px; }
 }
 #sortRow { display: none; align-items: center; gap: 8px; margin-bottom: 10px; }
 </style>
@@ -216,7 +217,7 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
         <option value="open">Open first</option><option value="visit">Recently visited</option><option value="name">Name A–Z</option>
       </select>
       <button class="btn" id="filtersBtn" aria-expanded="false" aria-controls="filters">Filters</button>
-      <button class="btn gold" id="checkBtn" title="Check right now whether the bazaars on screen (sellers you bought from) are open">⟳ Check now</button>
+      <button class="btn gold" id="checkBtn" title="Reads your log for new purchases (with the 🧭 userscript), then checks whether the bazaars on screen are open">⟳ Check now</button>
       <span id="checkMsg"></span>
     </div>
 
@@ -499,19 +500,48 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     if (first < 0) first = 0;
     return cards.slice(first, first + 30).map(c => Number(c.dataset.id));
   }
+  // With the 🧭 userscript on this page, Check now first asks it to read your log for new purchases (new sellers).
+  const hasUserscript = () => !!document.documentElement.getAttribute('data-gc-userscript');
+  function readLogViaUserscript(waitMs) {
+    return new Promise(resolve => {
+      const de = document.documentElement;
+      const done = r => { clearTimeout(timer); document.removeEventListener('gc:synced', onDone); resolve(r); };
+      const onDone = () => { let r = {}; try { r = JSON.parse(de.getAttribute('data-gc-sync-result') || '{}'); } catch (e) { /* ignore */ } done(r); };
+      const timer = setTimeout(() => done({ timeout: true }), waitMs);
+      document.addEventListener('gc:synced', onDone);
+      document.dispatchEvent(new Event('gc:sync'));
+    });
+  }
   async function checkNow() {
-    const ids = idsOnScreen();
-    if (!ids.length) return;
     const btn = $('checkBtn'), msg = $('checkMsg'), label = '⟳ Check now';
-    btn.disabled = true; btn.textContent = 'Checking…'; msg.textContent = '';
-    try {
-      const j = await getJSON('/api/check-now', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
-      if (j.wait) { btn.textContent = `Wait ${j.wait}s`; setTimeout(() => { btn.textContent = label; btn.disabled = false; }, j.wait * 1000); return; }
-      msg.textContent = j.error ? j.error : `Checked ${j.checked} bazaars` + (j.partial ? ' (some skipped)' : '');
-      await poll();
-    } catch (e) { msg.textContent = 'Check failed: ' + e.message; }
+    btn.disabled = true; msg.textContent = '';
+    const notes = [];
+    let fresh = [];
+    if (hasUserscript()) {
+      btn.textContent = 'Reading your log…';
+      const r = await readLogViaUserscript(20000);
+      if (r.error) notes.push(r.error);
+      else if (r.timeout || r.busy) notes.push('Still reading your log; new sellers appear when it finishes');
+      else if (r.added) {
+        notes.push(`${fmt(r.added)} new purchase${r.added === 1 ? '' : 's'}`);
+        fresh = (r.sellers || []).map(Number);
+        try { await loadData(); render(); } catch (e) { /* shown on the next poll */ }
+      } else notes.push('No new purchases');
+    }
+    const ids = [...new Set(fresh.concat(idsOnScreen()))].slice(0, 30); // new sellers first, then the ones on screen
+    if (ids.length) {
+      btn.textContent = 'Checking bazaars…';
+      try {
+        const j = await getJSON('/api/check-now', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+        if (j.wait) notes.push(`bazaars were checked moments ago, try again in ${j.wait}s`);
+        else notes.push(j.error ? j.error : `checked ${j.checked} bazaar${j.checked === 1 ? '' : 's'}` + (j.partial ? ' (some skipped)' : ''));
+        await poll();
+      } catch (e) { notes.push('Check failed: ' + e.message); }
+    }
+    const text = notes.join(' · ');
+    msg.textContent = text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
     btn.textContent = label; btn.disabled = false;
-    setTimeout(() => { msg.textContent = ''; }, 8000);
+    setTimeout(() => { msg.textContent = ''; }, 10000);
   }
 
   /* ---------- events ---------- */
