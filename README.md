@@ -1,15 +1,9 @@
-# Gilded Compass
+# Gilded Compass 🧭
 
-A Torn userscript (Torn PDA and Tampermonkey) that ranks the bazaar sellers you buy from, by item type.
-Later it links to a private website with live Open/Closed flags.
+A private website that ranks every Torn bazaar seller you have bought from, filterable by item type (plushies, flowers, $1 items…),
+with a live Open/Closed flag per seller, a Check now button, visit highlights and private notes per seller.
 
-Read-only: it reads your own Torn log and never acts in the game. Your key stays on your device.
+- **Userscript** (Torn PDA / Tampermonkey): reads your bazaar purchase log and sends it to your site. The 🧭 button on Torn opens the site.
+- **Website**: a free Cloudflare Worker behind a password. It keeps bazaar flags fresh every minute with a Public-only Torn key.
 
-## Our personal touches
-| Area | Choice |
-|---|---|
-| Name | **Gilded Compass** 🧭 |
-| Look | Dark (deep navy) with gold accents, compass motif |
-| Extra feature | **Notes per seller** (private, saved on your device) |
-
-Developer notes: see [HANDOFF.md](HANDOFF.md).
+Read-only: nothing here ever acts in the game. Developer notes: [HANDOFF.md](HANDOFF.md).
