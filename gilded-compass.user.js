@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.3.6
+// @version      0.3.7
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -24,7 +24,7 @@
  *
  * What it does
  * - 🧭 button on Torn: tap opens the Gilded Compass site, signed in as you. Hold it (or use the Tampermonkey menu) for settings.
- *   Drag it anywhere (phone and computer); where you leave it is remembered.
+ *   Drag it anywhere (phone and computer); where you leave it is remembered. It steps aside while a Torn pop-up (chat, menu) covers it.
  * - On the Gilded Compass page, "Check now" asks this script to read your log for new purchases first (no button there).
  * - In the background (when you tap 🧭, and every 15 minutes while Torn is open) it reads YOUR new "Bazaar buy"
  *   log entries (bazaar purchases only) and sends them to the site, where only you can see them.
@@ -41,7 +41,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.3.6'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.3.7'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -311,6 +311,7 @@
   const CSS = `
   #gc-btn{position:absolute;z-index:2147483645;cursor:pointer;font:700 15px/1 Arial;padding:4px 7px;border-radius:8px;border:1px solid #8a7330;background:#111a2e;color:#d4af37;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   #gc-btn.drag{cursor:grabbing;opacity:.85;box-shadow:0 0 0 3px rgba(212,175,55,.35)}
+  #gc-btn.aside{visibility:hidden;pointer-events:none}
   #gc-btn.busy{animation:gc-p 1.2s ease-in-out infinite}
   #gc-btn.err:after{content:"";position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:#e0605a;border:1px solid #111a2e}
   @keyframes gc-p{50%{box-shadow:0 0 0 4px rgba(212,175,55,.35)}}
@@ -463,6 +464,30 @@
     }
     run('tap');
   }
+  // Torn's pop-ups (chat windows, menus, dialogs) come first: while one covers the 🧭 button's spot, the button steps aside.
+  // A pop-up is something pinned to the screen (fixed or sticky) that is not a thin full-width bar like Torn's header.
+  function isPopup(el) {
+    for (let n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+      const pos = getComputedStyle(n).position;
+      if (pos === 'fixed' || pos === 'sticky') {
+        const r = n.getBoundingClientRect();
+        return r.width < window.innerWidth * 0.95 || r.height > window.innerHeight * 0.3;
+      }
+    }
+    return false;
+  }
+  function stepAside() {
+    const b = document.getElementById('gc-btn');
+    if (!b || b.classList.contains('drag')) return;
+    const r = b.getBoundingClientRect();
+    if (!r.width || r.bottom < 0 || r.top > window.innerHeight) return;
+    let covered = false;
+    for (const [x, y] of [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 2, r.top + 2], [r.right - 2, r.bottom - 2]]) {
+      const under = document.elementsFromPoint(x, y).find(el => el !== b && !b.contains(el)); // the first thing beneath the button
+      if (under && isPopup(under)) { covered = true; break; }
+    }
+    b.classList.toggle('aside', covered);
+  }
   // Phone and computer layouts differ, so each remembers its own spot.
   const posKey = () => (window.innerWidth < 700 ? 'btnpos_phone' : 'btnpos');
   const defaultPos = () => (window.innerWidth < 700 ? { left: 164, top: 4 } : { left: Math.max(8, window.innerWidth - 160), top: 8 }); // phone: next to Arbitrage's 💰
@@ -534,6 +559,8 @@
     if (location.origin === cfg.site()) { initSite(); return; }
     mount();
     setInterval(mount, 3000); // Torn sometimes rebuilds the page
+    setInterval(stepAside, 400);
+    window.addEventListener('scroll', stepAside, { passive: true });
     if (typeof GM_registerMenuCommand === 'function') GM_registerMenuCommand('Gilded Compass settings', openSetup);
     const auto = () => { if (!document.hidden && cfg.ready() && !state.needsSetup && Date.now() - (state.lastRun || 0) > AUTO_EVERY) run('auto'); };
     setTimeout(auto, 5000);
