@@ -415,6 +415,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function visitedAt(id) { return visits[id] || 0; }
   function glowing(id) { const v = visitedAt(id); return v > resetAt && Date.now() - v < span * 1000; }
   const profile = id => 'https://www.torn.com/profiles.php?XID=' + id;
+  const bazaar = id => 'https://www.torn.com/bazaar.php#?userId=' + id + '#/'; // Torn needs the #/ after the id
 
   /* ---------- building the list ---------- */
   function compute() {
@@ -462,7 +463,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     return `<article class="cardx${glowing(id) ? ' hl' : ''}" data-id="${id}">
       <div class="ct">
         <span class="rank" title="Rank by purchases${st.chip ? ' (' + esc(st.chip) + ')' : ''}">${x.rank}</span>
-        <div class="whois"><a class="sl nm${nm ? '' : ' unk'}" href="${profile(id)}" target="_blank" rel="noopener noreferrer">${nm ? esc(nm) : 'Player ' + id}</a><a class="sl sid" href="${profile(id)}" target="_blank" rel="noopener noreferrer">[${id}]</a></div>
+        <div class="whois"><a class="sl nm${nm ? '' : ' unk'}" href="${bazaar(id)}" target="_blank" rel="noopener noreferrer" title="Open their bazaar">${nm ? esc(nm) : 'Player ' + id}</a><a class="sl sid" href="${profile(id)}" target="_blank" rel="noopener noreferrer" title="Open their profile">[${id}]</a></div>
         ${seal(id)}
       </div>
       <div class="icons">${types}${ones}</div>
@@ -501,7 +502,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const open = regs.filter(s => baz(s.id) === 'open');
     const waiting = regs.filter(s => baz(s.id) === 'unchecked').length;
     $('strip').innerHTML = open.length
-      ? open.slice(0, 16).map(s => `<a class="reg sl${glowing(s.id) ? ' hl' : ''}" data-id="${s.id}" href="${profile(s.id)}" target="_blank" rel="noopener noreferrer">
+      ? open.slice(0, 16).map(s => `<a class="reg sl${glowing(s.id) ? ' hl' : ''}" data-id="${s.id}" href="${bazaar(s.id)}" target="_blank" rel="noopener noreferrer" title="Open their bazaar">
           <span class="seal open"><i></i></span><span class="rn">${esc(nameOf(s.id) || 'Player ' + s.id)}</span>
           <span class="ri">${topTypes(s, 2).map(([t]) => icon(t)).join('')}</span></a>`).join('')
       : `<span class="strip-empty">${!regs.length ? 'Your regulars appear here once purchases are synced.' : waiting ? 'Checking your regulars…' : 'None of your regulars are open right now. Press Check now for a fresh look.'}</span>`;
