@@ -290,9 +290,17 @@ async function probe(env, me) {
   return json(out);
 }
 
+// The site key works whatever capitals its name was saved with (TORN_API_KEY, Torn_api_key, ...).
+function withSiteKey(env) {
+  if (env.TORN_API_KEY) return env;
+  const name = Object.keys(env).find(n => n.toLowerCase() === 'torn_api_key');
+  return name ? Object.assign({}, env, { TORN_API_KEY: env[name] }) : env;
+}
+
 export default {
   // Only /api/* reaches this code; the page itself is served straight from public/.
   async fetch(req, env) {
+    env = withSiteKey(env);
     const url = new URL(req.url), p = url.pathname, m = req.method;
     if (!p.startsWith('/api/')) return env.ASSETS.fetch(req);
     return withSchema(env, async () => {
@@ -314,6 +322,7 @@ export default {
     });
   },
   async scheduled(event, env) {
+    env = withSiteKey(env);
     await withSchema(env, () => cron(env, event && event.scheduledTime));
   }
 };
