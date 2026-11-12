@@ -9,160 +9,177 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+/* ---------- Gilded Compass: navy and gold. Light theme follows the device. ---------- */
 :root {
-  --bg: #f7f2e6; --panel: #fffdf7; --panel2: #f3ecda; --line: #e2d6b8; --text: #2a2414; --muted: #6f6650;
-  --gold: #9c7614; --gold-soft: #c9a227; --on-gold: #fffaf0; --hl: rgba(201, 162, 39, .16); --hl-line: #c9a227;
-  --open: #23874a; --open-bg: rgba(35, 135, 74, .12); --closed: #8a6a2a; --closed-bg: rgba(138, 106, 42, .12);
-  --none: #7a7466; --none-bg: rgba(122, 116, 102, .12); --warn: #b5481f; --bar: #c9a227;
-  --shadow: 0 1px 2px rgba(60, 45, 10, .08), 0 4px 16px rgba(60, 45, 10, .06);
+  --bg: #f6f1e4; --bg2: #efe6cf; --card: #fffdf6; --card2: #faf4e4; --line: #e0d3b0; --text: #2a2414; --muted: #75694c;
+  --gold: #9a7412; --gold2: #c9a227; --gold-hi: #e8c968; --on-gold: #fffaf0; --glow: rgba(201, 162, 39, .28);
+  --warn: #b5481f; --shadow: 0 1px 2px rgba(60, 45, 10, .08), 0 8px 24px rgba(60, 45, 10, .07);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0b1020; --panel: #111a2e; --panel2: #16213a; --line: #26324f; --text: #ece6d6; --muted: #9aa3b5;
-    --gold: #d4af37; --gold-soft: #f1d77a; --on-gold: #1a1405; --hl: rgba(212, 175, 55, .13); --hl-line: #d4af37;
-    --open: #4fd184; --open-bg: rgba(79, 209, 132, .13); --closed: #e0b25a; --closed-bg: rgba(224, 178, 90, .12);
-    --none: #8e95a6; --none-bg: rgba(142, 149, 166, .12); --warn: #ff8a65; --bar: #d4af37;
-    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
+    --bg: #090e1c; --bg2: #0e1630; --card: #111a2f; --card2: #152039; --line: #243152; --text: #efe8d6; --muted: #98a1b6;
+    --gold: #d9b443; --gold2: #b8902a; --gold-hi: #f6dc8a; --on-gold: #1a1405; --glow: rgba(217, 180, 67, .30);
+    --warn: #ff8a65; --shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 10px 28px rgba(0, 0, 0, .3);
     color-scheme: dark;
   }
 }
 [hidden] { display: none !important; }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
+body {
+  margin: 0; color: var(--text); font: 14px/1.45 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg) radial-gradient(1200px 500px at 50% -120px, var(--bg2), transparent) no-repeat;
+}
 a { color: inherit; }
 button, select, input { font: inherit; color: inherit; }
-.wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
-
-header.brand { padding: 18px 0 8px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.logo { color: var(--gold); display: flex; }
-.brand h1 { font: 700 24px/1.1 Cinzel, Georgia, serif; letter-spacing: .04em; margin: 0; color: var(--gold); }
-.brand .tag { color: var(--muted); font-size: 13px; }
-#statusline { margin-left: auto; color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
-#statusline .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--open); box-shadow: 0 0 0 3px var(--open-bg); }
-#statusline.stale .dot { background: var(--warn); box-shadow: 0 0 0 3px rgba(255, 138, 101, .15); }
-.notice { margin: 6px 0; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--warn); color: var(--warn); font-size: 13px; }
-
-.bar-top { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 10px 0; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid transparent; }
-.bar-top.stuck { border-bottom-color: var(--line); }
-#q { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); outline: none; }
-#q:focus { border-color: var(--gold); }
-.btn { padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; white-space: nowrap; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 16px; }
+.btn { padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); cursor: pointer; white-space: nowrap; }
 .btn:hover { border-color: var(--gold); }
 .btn:disabled { opacity: .55; cursor: default; }
-.btn.gold { background: var(--gold); border-color: var(--gold); color: var(--on-gold); font-weight: 600; }
-.btn.small { padding: 5px 10px; font-size: 12.5px; border-radius: 8px; }
-.btn.armed { border-color: var(--warn); color: var(--warn); }
+.btn.gold { background: linear-gradient(180deg, var(--gold-hi), var(--gold)); border-color: var(--gold); color: var(--on-gold); font-weight: 700; }
+.btn.small { padding: 5px 11px; font-size: 12.5px; }
+.btn.armed, .linkbtn.armed { border-color: var(--warn); color: var(--warn); }
+.linkbtn { border: 0; background: none; color: var(--gold); cursor: pointer; padding: 0; font-size: inherit; }
+
+/* header */
+header.brand { padding: 20px 0 10px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.logo { color: var(--gold); display: flex; filter: drop-shadow(0 0 8px var(--glow)); }
+.brand h1 { font: 700 26px/1.05 Cinzel, Georgia, serif; letter-spacing: .06em; margin: 0;
+  background: linear-gradient(180deg, var(--gold-hi), var(--gold)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.brand .tag { color: var(--muted); font-size: 12.5px; letter-spacing: .02em; }
+.who { margin-left: auto; color: var(--muted); font-size: 12.5px; text-align: right; }
+.who b { color: var(--text); }
+#statusline { display: flex; align-items: center; gap: 6px; justify-content: flex-end; margin-top: 2px; }
+#statusline .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 3px var(--glow); }
+#statusline.stale .dot { background: var(--warn); box-shadow: none; }
+.notice { margin: 6px 0; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--warn); color: var(--warn); font-size: 13px; }
+
+/* open-now strip */
+.regulars { margin: 6px 0 14px; padding: 12px 14px; border-radius: 16px; border: 1px solid var(--line);
+  background: linear-gradient(135deg, var(--card2), var(--card)); box-shadow: var(--shadow); }
+.regulars h2 { margin: 0 0 8px; font: 700 13px/1.2 Cinzel, Georgia, serif; letter-spacing: .08em; color: var(--gold); display: flex; gap: 8px; align-items: baseline; }
+.regulars h2 small { font: 400 12px Inter, sans-serif; color: var(--muted); letter-spacing: 0; }
+.strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.reg { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 8px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--card); text-decoration: none; max-width: 240px; }
+.reg:hover { border-color: var(--gold); }
+.reg .rn { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reg .ri { font-size: 13px; letter-spacing: 1px; }
+.reg.hl { border-color: var(--gold); box-shadow: 0 0 0 2px var(--glow); }
+.strip-empty { color: var(--muted); font-size: 13px; }
+
+/* toolbar */
+.bar-top { position: sticky; top: 0; z-index: 5; padding: 10px 0; display: flex; gap: 8px; align-items: center; background: var(--bg); }
+.bar-top.stuck { box-shadow: 0 8px 12px -12px rgba(0, 0, 0, .5); }
+#q { flex: 1; min-width: 0; padding: 10px 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); outline: none; }
+#q:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--glow); }
+#sort { padding: 9px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
 #filtersBtn { display: none; }
-.short { display: none; }
-#checkMsg { color: var(--muted); font-size: 12.5px; min-width: 0; }
+#checkMsg { color: var(--muted); font-size: 12.5px; }
 
-.cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 6px 0 12px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; box-shadow: var(--shadow); }
-.card .k { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
-.card .v { font-size: 20px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
-.card.gild .v { color: var(--gold); }
-
-.controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 10px; }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
-.seg button { border: 0; background: none; padding: 6px 11px; cursor: pointer; font-size: 13px; }
+/* bearings: summary of what is on screen */
+.bearings { display: flex; flex-wrap: wrap; gap: 6px 22px; padding: 4px 2px 12px; color: var(--muted); font-size: 12.5px; }
+.bearings b { color: var(--text); font-size: 17px; font-weight: 700; margin-right: 5px; font-variant-numeric: tabular-nums; }
+.bearings .g b { color: var(--gold); }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-bottom: 10px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--card); }
+.seg button { border: 0; background: none; padding: 6px 12px; cursor: pointer; font-size: 13px; }
 .seg button[aria-pressed="true"] { background: var(--gold); color: var(--on-gold); font-weight: 600; }
 .lbl { color: var(--muted); font-size: 12.5px; display: inline-flex; gap: 6px; align-items: center; }
-select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); }
-
-.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-.chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 4px 11px; cursor: pointer; font-size: 13px; }
-.chip b { color: var(--muted); font-weight: 500; margin-left: 4px; font-variant-numeric: tabular-nums; }
-.chip[aria-pressed="true"] { background: var(--gold); border-color: var(--gold); color: var(--on-gold); }
+select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 5px 12px 5px 9px; cursor: pointer; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+.chip .ic { font-size: 15px; line-height: 1; }
+.chip b { color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; font-size: 12px; }
+.chip[aria-pressed="true"] { border-color: var(--gold); background: linear-gradient(180deg, var(--gold-hi), var(--gold)); color: var(--on-gold); }
 .chip[aria-pressed="true"] b { color: inherit; opacity: .8; }
 
-.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); }
-table { width: 100%; min-width: 860px; border-collapse: collapse; }
-th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-tbody tr:last-child td { border-bottom: 0; }
-th { position: relative; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; background: var(--panel2); }
-th button { all: unset; cursor: pointer; }
-th button:hover, th[aria-sort] button { color: var(--gold); }
-th[aria-sort="ascending"] button::after { content: " ▲"; font-size: 9px; }
-th[aria-sort="descending"] button::after { content: " ▼"; font-size: 9px; }
-.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-th.num { text-align: right; }
-.c-rank { width: 44px; color: var(--muted); }
-tr.hl td { background: var(--hl); }
-tr.hl td:first-child { box-shadow: inset 3px 0 0 var(--hl-line); }
+/* compass cards */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 12px; }
+.cardx { position: relative; border-radius: 16px; border: 1px solid var(--line); background: linear-gradient(160deg, var(--card2), var(--card) 60%);
+  padding: 12px 14px 10px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.cardx.hl { border-color: var(--gold); box-shadow: 0 0 0 2px var(--glow), var(--shadow); }
+.ct { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.rank { flex: 0 0 auto; min-width: 30px; height: 30px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center;
+  font: 700 12.5px Inter, system-ui, sans-serif; color: var(--gold); border: 1px solid var(--gold2); background: var(--bg); font-variant-numeric: tabular-nums; }
+.whois { min-width: 0; flex: 1; }
 .sl { text-decoration: none; }
-.sl.nm { font-weight: 600; }
-.sl.nm:hover { color: var(--gold); text-decoration: underline; }
-.sid { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.sl.nm { font-weight: 700; font-size: 15px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl.nm:hover { color: var(--gold); }
+.sl.nm.unk { color: var(--muted); font-weight: 500; font-style: italic; }
+.sid { color: var(--muted); font-size: 11.5px; }
 .sid:hover { color: var(--gold); }
-.unk { color: var(--muted); font-weight: 500; font-style: italic; }
-.notebtn { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 13px; opacity: .55; }
-tr:hover .notebtn, .notebtn.has { opacity: 1; }
+/* gold seal: filled = open, hollow = closed, dashed = not checked yet */
+.seal { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); cursor: default; }
+.seal i { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--gold2); display: inline-block; position: relative; }
+.seal.open { color: var(--gold); }
+.seal.open i { border-color: var(--gold); background: radial-gradient(circle at 35% 30%, var(--gold-hi), var(--gold) 60%, var(--gold2)); box-shadow: 0 0 10px var(--glow); }
+.seal.open i::after { content: "✦"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 9px; color: var(--on-gold); font-style: normal; }
+.seal.closed i { background: transparent; opacity: .8; }
+.seal.unchecked i { border-style: dashed; border-color: var(--muted); }
+.icons { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); }
+.icons span { white-space: nowrap; }
+.icons .ic { font-size: 15px; margin-right: 3px; }
+.icons b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.stats { display: flex; gap: 14px; font-size: 12.5px; color: var(--muted); }
+.stats b { color: var(--text); font-size: 15px; font-weight: 700; margin-right: 3px; font-variant-numeric: tabular-nums; }
+.stats .spent b { color: var(--gold); }
+.meter { height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.meter i { display: block; height: 100%; background: linear-gradient(90deg, var(--gold2), var(--gold-hi)); }
+.cf { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); min-height: 20px; }
+.cardx.hl .visit { color: var(--gold); font-weight: 600; }
+.notebtn { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0; font-size: 12px; }
 .notebtn:hover { color: var(--gold); }
-.note { color: var(--gold); font-size: 12.5px; font-style: italic; margin-top: 2px; overflow-wrap: anywhere; }
-.noteedit { width: 100%; margin-top: 4px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--gold); background: var(--bg); }
-.pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: default; }
-.pill.open { color: var(--open); background: var(--open-bg); }
-.pill.closed { color: var(--closed); background: var(--closed-bg); }
-.pill.none { color: var(--none); background: var(--none-bg); }
-.pill.unchecked { color: var(--muted); border: 1px dashed var(--line); }
-.ibar { display: block; height: 4px; border-radius: 2px; background: var(--line); margin-top: 4px; overflow: hidden; }
-.ibar i { display: block; height: 100%; background: var(--bar); border-radius: 2px; }
-.c-visit { color: var(--muted); white-space: nowrap; }
-td.c-mostly { color: var(--muted); font-size: 13px; }
-.tg { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; margin: 0 4px 4px 0; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
-.tg b { color: var(--text); font-weight: 600; margin-left: 3px; }
-#showing { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
-.who { color: var(--muted); font-size: 12.5px; display: flex; gap: 8px; align-items: center; }
-.who b { color: var(--text); }
-.linkbtn { border: 0; background: none; color: var(--gold); cursor: pointer; padding: 0; font-size: inherit; }
-.linkbtn.armed { color: var(--warn); }
-.login { max-width: 560px; margin: 24px auto 40px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; box-shadow: var(--shadow); }
-.login h2 { font: 700 20px/1.2 Cinzel, Georgia, serif; color: var(--gold); margin: 0 0 8px; }
-.login p { color: var(--muted); margin: 8px 0; }
-.login form { display: flex; gap: 8px; margin: 14px 0 8px; }
-.login input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); }
-.login a { color: var(--gold); }
-#loginMsg { min-height: 1.4em; color: var(--warn); font-size: 13px; }
-.tos { width: 100%; min-width: 0; border-collapse: collapse; margin-top: 14px; font-size: 12.5px; }
-.tos th, .tos td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-transform: none; letter-spacing: 0; vertical-align: top; }
-.tos th { width: 34%; background: none; color: var(--text); font-size: 12.5px; font-weight: 600; }
-.tos td { color: var(--muted); }
-.more { display: flex; justify-content: center; padding: 14px 0 28px; gap: 8px; color: var(--muted); align-items: center; flex-wrap: wrap; }
-.empty { padding: 40px 16px; text-align: center; color: var(--muted); }
+.note { color: var(--gold); font-size: 13px; font-style: italic; overflow-wrap: anywhere; border-top: 1px dashed var(--line); padding-top: 6px; }
+.noteedit { width: 100%; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--gold); background: var(--bg); }
+.more { display: flex; justify-content: center; padding: 18px 0 28px; gap: 10px; color: var(--muted); align-items: center; flex-wrap: wrap; font-size: 12.5px; }
+.empty { padding: 48px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 16px; }
 footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: center; }
 
-@media (max-width: 1000px) { .cards { grid-template-columns: repeat(3, 1fr); } }
+/* sign in */
+.login { max-width: 580px; margin: 24px auto 40px; background: linear-gradient(160deg, var(--card2), var(--card)); border: 1px solid var(--line); border-radius: 18px; padding: 24px; box-shadow: var(--shadow); }
+.login h2 { font: 700 20px/1.2 Cinzel, Georgia, serif; color: var(--gold); margin: 0 0 8px; letter-spacing: .04em; }
+.login p { color: var(--muted); margin: 8px 0; }
+.login form { display: flex; gap: 8px; margin: 14px 0 8px; }
+.login input { flex: 1; min-width: 0; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); }
+.login a { color: var(--gold); }
+#loginMsg { min-height: 1.4em; color: var(--warn); font-size: 13px; }
+.tos { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12.5px; }
+.tos th, .tos td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+.tos th { width: 34%; color: var(--text); font-weight: 600; }
+.tos td { color: var(--muted); }
+
+/* phone */
 @media (max-width: 700px) {
-  header.brand { padding-top: 12px; }
-  .brand h1 { font-size: 20px; }
-  #statusline { margin-left: 0; width: 100%; }
+  header.brand { padding-top: 14px; gap: 10px; }
+  .brand h1 { font-size: 21px; }
+  .who { margin-left: 0; width: 100%; text-align: left; }
+  #statusline { justify-content: flex-start; }
   #filtersBtn { display: inline-block; }
   #filters { display: none; }
   body.filters-open #filters { display: block; }
-  .cards { grid-template-columns: repeat(2, 1fr); }
-  .btn { padding: 9px 11px; }
-  table { min-width: 0; table-layout: fixed; }
-  .c-rank, .c-spent, .c-visit, .c-mostly, .sid, .ibar { display: none; }
-  th, td { padding: 8px 6px; }
-  .c-seller { width: auto; overflow-wrap: anywhere; }
-  .c-baz { width: 92px; }
-  .c-p { width: 58px; } .c-i { width: 58px; }
-  .tablewrap { overflow-x: hidden; }
-  #checkMsg, #showing { display: none; }
-  .full { display: none; } .short { display: inline; }
+  #sort { display: none; }
+  body.filters-open #sortRow { display: flex; }
+  .btn { padding: 9px 12px; }
+  .grid { grid-template-columns: 1fr; gap: 8px; }
+  .cardx { padding: 10px 12px 8px; gap: 5px; }
+  .sid, .meter, .stats .spent, .cf .visit { display: none; }
+  #checkMsg { display: none; }
 }
+#sortRow { display: none; align-items: center; gap: 8px; margin-bottom: 10px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header class="brand">
     <span class="logo" aria-hidden="true">
-      <svg viewBox="0 0 32 32" width="30" height="30"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" stroke-width=".7" opacity=".55"/><path d="M16 3.5 19 16 16 28.5 13 16Z" fill="currentColor"/><path d="M3.5 16 16 13.2 28.5 16 16 18.8Z" fill="currentColor" opacity=".5"/><circle cx="16" cy="16" r="1.7" fill="var(--bg)"/></svg>
+      <svg viewBox="0 0 32 32" width="34" height="34"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" stroke-width=".7" opacity=".55"/><path d="M16 3.5 19 16 16 28.5 13 16Z" fill="currentColor"/><path d="M3.5 16 16 13.2 28.5 16 16 18.8Z" fill="currentColor" opacity=".5"/><circle cx="16" cy="16" r="1.7" fill="var(--bg)"/></svg>
     </span>
-    <div><h1>Gilded Compass</h1><div class="tag" id="tagline">Every bazaar you buy from, ranked</div></div>
-    <div class="who" id="who" hidden><span id="whoName"></span> · <button class="linkbtn" id="logoutBtn">Sign out</button></div>
-    <div id="statusline" title="" hidden><span class="dot"></span><span id="statustext">Loading…</span></div>
+    <div><h1>Gilded Compass</h1><div class="tag" id="tagline">Every bazaar you buy from</div></div>
+    <div class="who" id="who" hidden>
+      <div><span id="whoName"></span> · <button class="linkbtn" id="logoutBtn">Sign out</button></div>
+      <div id="statusline"><span class="dot"></span><span id="statustext">Loading…</span></div>
+    </div>
   </header>
 
   <section id="login" class="login" hidden>
@@ -185,52 +202,47 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
   </section>
 
   <div id="app" hidden>
-  <div id="notices"></div>
+    <div id="notices"></div>
 
-  <div class="bar-top" id="bartop">
-    <input id="q" type="search" placeholder="Search name, id or note  ( / )" autocomplete="off" aria-label="Search sellers">
-    <button class="btn" id="filtersBtn" aria-expanded="false" aria-controls="filters">Filters</button>
-    <button class="btn gold" id="checkBtn" title="Check right now whether the bazaars on screen (sellers you bought from) are open">Check now</button>
-    <span id="checkMsg"></span>
-    <span id="showing"></span>
-  </div>
+    <section class="regulars" aria-label="Your regulars open now">
+      <h2>✦ Open now <small>your regulars</small></h2>
+      <div class="strip" id="strip"></div>
+    </section>
 
-  <section id="filters">
-    <div class="cards" id="cards"></div>
-    <div class="controls">
-      <span class="seg" role="group" aria-label="Bazaar">
-        <button data-baz="any" aria-pressed="true">Any bazaar</button><button data-baz="open" aria-pressed="false">Open now</button><button data-baz="closed" aria-pressed="false">Closed</button>
-      </span>
-      <span class="seg" role="group" aria-label="Visits">
-        <button data-visit="any" aria-pressed="true">Any visit</button><button data-visit="yes" aria-pressed="false">Visited</button><button data-visit="no" aria-pressed="false">Not visited</button>
-      </span>
-      <label class="lbl">Highlight visits for
-        <select id="span"><option value="1800">30 min</option><option value="3600">1 hour</option><option value="14400">4 hours</option><option value="86400">1 day</option></select>
-      </label>
-      <button class="btn small" id="resetHl" title="Un-highlight rows now; visit times are kept">Reset highlights</button>
-      <button class="btn small" id="clearVisits" title="Forget all visit times">Clear visit marks</button>
+    <div class="bar-top" id="bartop">
+      <input id="q" type="search" placeholder="Search a seller, id or note  ( / )" autocomplete="off" aria-label="Search sellers">
+      <select id="sort" aria-label="Sort sellers">
+        <option value="rank">Most bought from</option><option value="i">Most items</option><option value="s">Most spent</option>
+        <option value="open">Open first</option><option value="visit">Recently visited</option><option value="name">Name A–Z</option>
+      </select>
+      <button class="btn" id="filtersBtn" aria-expanded="false" aria-controls="filters">Filters</button>
+      <button class="btn gold" id="checkBtn" title="Check right now whether the bazaars on screen (sellers you bought from) are open">⟳ Check now</button>
+      <span id="checkMsg"></span>
     </div>
-    <div class="chips" id="chips"></div>
-  </section>
 
-  <div class="tablewrap">
-    <table>
-      <thead><tr>
-        <th class="c-rank" data-sort="rank"><button>#</button></th>
-        <th class="c-seller" data-sort="name"><button>Seller</button></th>
-        <th class="c-baz" data-sort="bazaar"><button>Bazaar</button></th>
-        <th class="num c-p" data-sort="p"><button><span class="full">Purchases</span><span class="short">Buys</span></button></th>
-        <th class="num c-i" data-sort="i"><button>Items</button></th>
-        <th class="num c-spent" data-sort="s"><button>Spent</button></th>
-        <th class="c-visit" data-sort="visit"><button>Last visit</button></th>
-        <th class="c-mostly">Mostly sells you</th>
-      </tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
+    <section id="filters">
+      <div class="bearings" id="bearings"></div>
+      <div id="sortRow"><span class="lbl">Sort</span><select id="sort2" aria-label="Sort sellers"></select></div>
+      <div class="chips" id="chips"></div>
+      <div class="controls">
+        <span class="seg" role="group" aria-label="Bazaar">
+          <button data-baz="any" aria-pressed="true">Any</button><button data-baz="open" aria-pressed="false">Open</button><button data-baz="closed" aria-pressed="false">Closed</button>
+        </span>
+        <span class="seg" role="group" aria-label="Visits">
+          <button data-visit="any" aria-pressed="true">Any visit</button><button data-visit="yes" aria-pressed="false">Visited</button><button data-visit="no" aria-pressed="false">Not visited</button>
+        </span>
+        <label class="lbl">Glow after a visit for
+          <select id="span"><option value="1800">30 min</option><option value="3600">1 hour</option><option value="14400">4 hours</option><option value="86400">1 day</option></select>
+        </label>
+        <button class="btn small" id="resetHl" title="Turn the glow off now; visit times are kept">Reset glow</button>
+        <button class="btn small" id="clearVisits" title="Forget all visit times">Clear visit marks</button>
+      </div>
+    </section>
+
+    <div class="grid" id="rows"></div>
     <div class="empty" id="empty" hidden></div>
-  </div>
-  <div class="more"><button class="btn" id="moreBtn" hidden>Show 100 more</button><span id="countNote"></span></div>
-  <footer><span id="footer"></span> · <button class="linkbtn" id="forgetBtn">Delete my data</button></footer>
+    <div class="more"><span id="showing"></span><button class="btn" id="moreBtn" hidden>Show 100 more</button></div>
+    <footer><span id="footer"></span> · <button class="linkbtn" id="forgetBtn">Delete my data</button></footer>
   </div>
 </div>
 
@@ -244,6 +256,16 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
   const money = n => n >= 1e9 ? '$' + (n / 1e9).toFixed(2) + 'b' : n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'm' : n >= 1e4 ? '$' + (n / 1e3).toFixed(1) + 'k' : '$' + fmt(n);
   const ONE = '$1 items';
   const PAGE = 100;
+  const REGULARS = 50; // "your regulars" = your 50 most-bought-from sellers
+
+  // One small icon per Torn item type.
+  const ICON = {
+    'Plushie': '🧸', 'Flower': '🌸', 'Drug': '💊', 'Booster': '⚡', 'Candy': '🍬', 'Alcohol': '🍺', 'Energy Drink': '🥤',
+    'Medical': '🩹', 'Weapon': '⚔️', 'Melee': '🗡️', 'Primary': '🔫', 'Secondary': '🔫', 'Temporary': '💣', 'Armor': '🛡️', 'Defensive': '🛡️',
+    'Material': '🧱', 'Tool': '🔧', 'Clothing': '👕', 'Jewelry': '💍', 'Special': '✨', 'Supply Pack': '📦', 'Car': '🚗',
+    'Enhancer': '⚙️', 'Collectible': '🏆', 'Artifact': '🏺', 'Book': '📖', 'Other': '🔹', 'Unused': '▫️', 'Unknown': '❔', [ONE]: '🪙'
+  };
+  const icon = t => ICON[t] || '🔸';
 
   // Browser storage: only conveniences for this viewer (visits, notes, settings). Always wrapped.
   const ls = {
@@ -252,14 +274,14 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
   };
   let visits = ls.get('visits', {});      // id -> ms of last click
   let notes = ls.get('notes', {});        // id -> text
-  let resetAt = ls.get('resetAt', 0);     // highlights older than this are off (history kept)
+  let resetAt = ls.get('resetAt', 0);     // glow older than this is off (history kept)
   let span = ls.get('span', 3600);
 
   const EMPTY = { sellers: [], purchases: 0, first: 0, last: 0, lastUpload: 0 };
   let DATA = EMPTY;
   const STATUS = new Map(); // id -> { o, b, m, t, name, nt }
   let since = 0, skew = 0, cronAt = 0, lastUpload = 0, statusErr = null, offline = false;
-  const st = { q: '', chip: null, baz: 'any', visit: 'any', sort: { key: 'rank', dir: 1 }, shown: PAGE };
+  const st = { q: '', chip: null, baz: 'any', visit: 'any', sort: ls.get('sort', 'rank'), shown: PAGE };
   let list = [], hiddenNoBazaar = 0;
   let token = ls.get('token', null), started = false;
   let busyUntil = 0, renderTimer = null;
@@ -279,15 +301,15 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     if (s.o) return 'open';
     return s.b ? 'closed' : 'none';
   }
-  const PILL = { open: 'Open', closed: 'Closed', none: 'No bazaar', unchecked: 'Checking…' };
-  const BAZ_ORDER = { open: 0, closed: 1, none: 2, unchecked: 3 };
-  function pill(id) {
+  const SEAL = { open: 'Open', closed: 'Closed', unchecked: 'Checking' };
+  function seal(id) {
     const b = baz(id), s = STATUS.get(id);
-    const tip = s && s.t ? 'Checked ' + ago(s.t) + ' (snapshot, not live)' : 'Not checked yet: the first check happens within a few minutes';
-    return `<span class="pill ${b}" title="${esc(tip)}">${PILL[b]}</span>`;
+    const tip = s && s.t ? 'Checked ' + ago(s.t) + ' (a snapshot, press Check now for a fresh one)' : 'Not checked yet: the first check happens within a few minutes';
+    return `<span class="seal ${b}" title="${esc(tip)}"><i></i>${SEAL[b] || ''}</span>`;
   }
   function visitedAt(id) { return visits[id] || 0; }
-  function highlighted(id) { const v = visitedAt(id); return v > resetAt && Date.now() - v < span * 1000; }
+  function glowing(id) { const v = visitedAt(id); return v > resetAt && Date.now() - v < span * 1000; }
+  const profile = id => 'https://www.torn.com/profiles.php?XID=' + id;
 
   /* ---------- building the list ---------- */
   function compute() {
@@ -314,33 +336,36 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
       if (st.visit === 'no' && visitedAt(id)) return false;
       return true;
     });
-    const k = st.sort.key, d = st.sort.dir;
-    const val = {
-      rank: x => x.rank, p: x => x.v[0], i: x => x.v[1], s: x => x.v[2],
-      name: x => (nameOf(x.s.id) || '￿' + x.s.id).toLowerCase(),
-      bazaar: x => BAZ_ORDER[baz(x.s.id)], visit: x => visitedAt(x.s.id)
-    }[k];
-    out.sort((a, b) => { const A = val(a), B = val(b); return (A < B ? -1 : A > B ? 1 : 0) * d || a.rank - b.rank; });
-    return out;
+    const ORDER = { open: 0, closed: 1, unchecked: 2 };
+    const by = {
+      rank: (a, b) => a.rank - b.rank,
+      i: (a, b) => b.v[1] - a.v[1] || a.rank - b.rank,
+      s: (a, b) => b.v[2] - a.v[2] || a.rank - b.rank,
+      open: (a, b) => ORDER[baz(a.s.id)] - ORDER[baz(b.s.id)] || a.rank - b.rank,
+      visit: (a, b) => visitedAt(b.s.id) - visitedAt(a.s.id) || a.rank - b.rank,
+      name: (a, b) => (nameOf(a.s.id) || '￿' + a.s.id).localeCompare(nameOf(b.s.id) || '￿' + b.s.id) || a.rank - b.rank
+    }[st.sort] || ((a, b) => a.rank - b.rank);
+    return out.sort(by);
   }
-  function topTypes(s) {
-    return Object.entries(s.t).filter(e => e[0] !== ONE).sort((a, b) => b[1][1] - a[1][1]).slice(0, 3)
-      .map(e => `<span class="tg">${esc(e[0])}<b>${fmt(e[1][1])}</b></span>`).join('');
+  function topTypes(s, n) {
+    return Object.entries(s.t).filter(e => e[0] !== ONE).sort((a, b) => b[1][1] - a[1][1]).slice(0, n);
   }
-  function rowHtml(x, maxP) {
-    const id = x.s.id, nm = nameOf(id), url = 'https://www.torn.com/profiles.php?XID=' + id;
-    const note = notes[id];
-    const v = visitedAt(id);
-    return `<tr data-id="${id}"${highlighted(id) ? ' class="hl"' : ''}>
-      <td class="c-rank">${x.rank}</td>
-      <td class="c-seller"><a class="sl nm${nm ? '' : ' unk'}" href="${url}" target="_blank" rel="noopener noreferrer">${nm ? esc(nm) : 'Player ' + id}</a><a class="sl sid" href="${url}" target="_blank" rel="noopener noreferrer">[${id}]</a><button class="notebtn${note ? ' has' : ''}" data-note="${id}" title="${note ? 'Edit note' : 'Add a note'}" aria-label="Note">✎</button>${note ? `<div class="note">${esc(note)}</div>` : ''}</td>
-      <td class="c-baz">${pill(id)}</td>
-      <td class="num c-p">${fmt(x.v[0])}<span class="ibar"><i style="width:${maxP ? Math.max(3, Math.round(100 * x.v[0] / maxP)) : 0}%"></i></span></td>
-      <td class="num c-i">${fmt(x.v[1])}</td>
-      <td class="num c-spent" title="$${fmt(x.v[2])}">${money(x.v[2])}</td>
-      <td class="c-visit" data-v="${v}">${v ? agoMs(v) : '—'}</td>
-      <td class="c-mostly">${topTypes(x.s)}</td>
-    </tr>`;
+  function cardHtml(x, maxP) {
+    const id = x.s.id, nm = nameOf(id), note = notes[id], v = visitedAt(id);
+    const types = topTypes(x.s, 3).map(([t, c]) => `<span title="${esc(t)}"><span class="ic">${icon(t)}</span><b>${fmt(c[1])}</b></span>`).join('');
+    const ones = x.s.t[ONE] && !st.chip ? `<span title="$1 items"><span class="ic">${icon(ONE)}</span><b>${fmt(x.s.t[ONE][1])}</b></span>` : '';
+    return `<article class="cardx${glowing(id) ? ' hl' : ''}" data-id="${id}">
+      <div class="ct">
+        <span class="rank" title="Rank by purchases${st.chip ? ' (' + esc(st.chip) + ')' : ''}">${x.rank}</span>
+        <div class="whois"><a class="sl nm${nm ? '' : ' unk'}" href="${profile(id)}" target="_blank" rel="noopener noreferrer">${nm ? esc(nm) : 'Player ' + id}</a><a class="sl sid" href="${profile(id)}" target="_blank" rel="noopener noreferrer">[${id}]</a></div>
+        ${seal(id)}
+      </div>
+      <div class="icons">${types}${ones}</div>
+      <div class="stats"><span><b>${fmt(x.v[0])}</b>buys</span><span><b>${fmt(x.v[1])}</b>items</span><span class="spent" title="$${fmt(x.v[2])}"><b>${money(x.v[2])}</b></span></div>
+      <div class="meter"><i style="width:${maxP ? Math.max(3, Math.round(100 * x.v[0] / maxP)) : 0}%"></i></div>
+      <div class="cf"><span class="visit">${v ? '✓ visited ' + agoMs(v) : ''}</span><button class="notebtn" data-note="${id}">${note ? '✎ edit note' : '✎ add note'}</button></div>
+      ${note ? `<div class="note">${esc(note)}</div>` : ''}
+    </article>`;
   }
 
   /* ---------- rendering ---------- */
@@ -349,42 +374,46 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     list = compute();
     const shown = list.slice(0, st.shown);
     const maxP = list.reduce((m, x) => Math.max(m, x.v[0]), 0);
-    $('rows').innerHTML = shown.map(x => rowHtml(x, maxP)).join('');
-    const none = !DATA.sellers.length;
+    $('rows').innerHTML = shown.map(x => cardHtml(x, maxP)).join('');
     $('empty').hidden = !!shown.length;
-    $('empty').innerHTML = none
+    $('empty').innerHTML = !DATA.sellers.length
       ? 'No purchases yet. Install the <b>🧭 Gilded Compass</b> userscript and open Torn: it sends your bazaar purchases here.'
       : 'No sellers match these filters.';
     $('moreBtn').hidden = list.length <= st.shown;
     $('moreBtn').textContent = `Show ${Math.min(PAGE, list.length - st.shown)} more`;
-    $('countNote').textContent = '';
-    $('showing').textContent = list.length ? `Showing ${fmt(shown.length)} of ${fmt(list.length)} sellers` : '';
-    document.querySelectorAll('th[data-sort]').forEach(th => {
-      if (th.dataset.sort === st.sort.key) th.setAttribute('aria-sort', st.sort.dir === 1 ? 'ascending' : 'descending');
-      else th.removeAttribute('aria-sort');
-    });
-    renderCards(); renderChips(); renderFilterCount(); renderStatus();
+    $('showing').textContent = list.length ? `${fmt(shown.length)} of ${fmt(list.length)} sellers` : '';
+    renderStrip(); renderBearings(); renderChips(); renderFilterCount(); renderStatus();
   }
-  // Re-render, but never while a click is in progress (replacing rows under a click can cancel it).
+  // Re-render, but never while a click is in progress (replacing cards under a click can cancel it).
   function renderSoon() {
     if (renderTimer) return;
     const wait = Math.max(0, busyUntil - Date.now());
     renderTimer = setTimeout(() => { if (Date.now() < busyUntil) { renderTimer = null; renderSoon(); } else render(); }, wait);
   }
-  function renderCards() {
+  // Your regulars (top 50 overall) whose bazaar is open right now.
+  function renderStrip() {
+    const regs = DATA.sellers.filter(s => baz(s.id) !== 'none').slice(0, REGULARS);
+    const open = regs.filter(s => baz(s.id) === 'open');
+    const waiting = regs.filter(s => baz(s.id) === 'unchecked').length;
+    $('strip').innerHTML = open.length
+      ? open.slice(0, 16).map(s => `<a class="reg sl${glowing(s.id) ? ' hl' : ''}" data-id="${s.id}" href="${profile(s.id)}" target="_blank" rel="noopener noreferrer">
+          <span class="seal open"><i></i></span><span class="rn">${esc(nameOf(s.id) || 'Player ' + s.id)}</span>
+          <span class="ri">${topTypes(s, 2).map(([t]) => icon(t)).join('')}</span></a>`).join('')
+      : `<span class="strip-empty">${!regs.length ? 'Your regulars appear here once purchases are synced.' : waiting ? 'Checking your regulars…' : 'None of your regulars are open right now. Press Check now for a fresh look.'}</span>`;
+  }
+  function renderBearings() {
     let p = 0, i = 0, s = 0, open = 0;
     for (const x of list) { p += x.v[0]; i += x.v[1]; s += x.v[2]; if (baz(x.s.id) === 'open') open++; }
-    const c = [['Sellers', fmt(list.length)], ['Open now', fmt(open), 1], ['Purchases', fmt(p)], ['Items', fmt(i)], ['Spent', money(s), 1]];
-    $('cards').innerHTML = c.map(([k, v, g]) => `<div class="card${g ? ' gild' : ''}"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+    $('bearings').innerHTML = [[fmt(list.length), 'sellers'], [fmt(open), 'open now', 1], [fmt(p), 'purchases'], [fmt(i), 'items'], [money(s), 'spent', 1]]
+      .map(([v, k, g]) => `<span${g ? ' class="g"' : ''}><b>${v}</b>${k}</span>`).join('');
   }
   function renderChips() {
     const tt = {}; // items per type, counting only sellers that are shown (have a bazaar)
     for (const sl of DATA.sellers) { if (baz(sl.id) === 'none') continue; for (const k in sl.t) tt[k] = (tt[k] || 0) + sl.t[k][1]; }
     const types = Object.keys(tt).filter(t => t !== ONE).sort((a, b) => tt[b] - tt[a]);
     if (tt[ONE]) types.push(ONE);
-    const chip = (val, label, n) => `<button class="chip" data-chip="${esc(val)}" aria-pressed="${(st.chip || '') === val}">${esc(label)}${n != null ? `<b>${fmt(n)}</b>` : ''}</button>`;
-    let all = 0; for (const sl of DATA.sellers) if (baz(sl.id) !== 'none') all += sl.tot[1];
-    $('chips').innerHTML = chip('', 'All', all) + types.map(t => chip(t, t, tt[t])).join('');
+    const chip = (val, label, ic, n) => `<button class="chip" data-chip="${esc(val)}" aria-pressed="${(st.chip || '') === val}"><span class="ic">${ic}</span>${esc(label)}${n != null ? `<b>${fmt(n)}</b>` : ''}</button>`;
+    $('chips').innerHTML = chip('', 'Everything', '🧭', null) + types.map(t => chip(t, t, icon(t), tt[t])).join('');
   }
   function renderFilterCount() {
     const n = (st.chip ? 1 : 0) + (st.baz !== 'any' ? 1 : 0) + (st.visit !== 'any' ? 1 : 0);
@@ -395,36 +424,36 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     let checked = 0, newest = 0;
     for (const id of ids) { const s = STATUS.get(id); if (s && s.t) { checked++; if (s.t > newest) newest = s.t; } }
     const stale = !cronAt || serverNow() - cronAt > 300;
-    const line = $('statusline');
-    line.classList.toggle('stale', stale || offline);
+    $('statusline').classList.toggle('stale', stale || offline);
     $('statustext').textContent = offline ? 'Offline, retrying…'
-      : `Live · ${fmt(checked)} of ${fmt(ids.length)} checked` + (newest ? ` · newest check ${ago(newest)}` : '');
+      : `Live · ${fmt(checked)} of ${fmt(ids.length)} checked` + (newest ? ` · newest ${ago(newest)}` : '');
     const n = [];
     if (statusErr) n.push(`Bazaar checks are paused: ${statusErr.msg}. (Site owner: check the TORN_API_KEY secret.)`);
     if (!offline && stale && ids.length) n.push(cronAt ? `No bazaar check has run for ${Math.round((serverNow() - cronAt) / 60)} minutes.` : 'No bazaar check has run yet.');
     $('notices').innerHTML = n.map(t => `<div class="notice">${esc(t)}</div>`).join('');
-    $('footer').textContent = (lastUpload ? `Purchases last synced ${ago(lastUpload)} by the 🧭 userscript · ` : 'No purchases synced yet · ') + `${fmt(DATA.purchases)} purchases`
+    $('footer').textContent = (lastUpload ? `Purchases last synced ${ago(lastUpload)} by the 🧭 userscript` : 'No purchases synced yet')
       + (hiddenNoBazaar ? ` · ${fmt(hiddenNoBazaar)} seller${hiddenNoBazaar === 1 ? '' : 's'} without a bazaar hidden` : '');
   }
-  // Status changes: update pills and names in place; only re-render when filters or sorting depend on them.
-  function patchRows(changed) {
-    if (st.baz !== 'any' || ['bazaar', 'name'].includes(st.sort.key) || st.q || changed.some(id => baz(id) === 'none')) { renderSoon(); return; }
+  // Status changes: update seals and names in place; only re-render when filters or sorting depend on them.
+  function patchCards(changed) {
+    if (st.baz !== 'any' || ['open', 'name'].includes(st.sort) || st.q || changed.some(id => baz(id) === 'none')) { renderSoon(); return; }
     for (const id of changed) {
-      const tr = document.querySelector(`tr[data-id="${id}"]`); if (!tr) continue;
-      tr.querySelector('.c-baz').innerHTML = pill(id);
-      const nm = nameOf(id), a = tr.querySelector('.sl.nm');
+      const c = document.querySelector(`.cardx[data-id="${id}"]`); if (!c) continue;
+      c.querySelector('.seal').outerHTML = seal(id);
+      const nm = nameOf(id), a = c.querySelector('.sl.nm');
       if (nm && a.textContent !== nm) { a.textContent = nm; a.classList.remove('unk'); }
     }
-    renderCards(); renderStatus();
+    if (Date.now() >= busyUntil) renderStrip();
+    renderBearings(); renderStatus();
   }
-  // Every 20 s: highlight classes and "Last visit" text only, rows are never replaced.
-  function refreshHighlights() {
-    document.querySelectorAll('#rows tr').forEach(tr => {
-      const id = Number(tr.dataset.id);
-      tr.classList.toggle('hl', highlighted(id));
-      const c = tr.querySelector('.c-visit'), v = visitedAt(id);
-      c.textContent = v ? agoMs(v) : '—';
+  // Every 20 s: glow classes and "visited" text only, cards are never replaced.
+  function refreshGlow() {
+    document.querySelectorAll('.cardx').forEach(c => {
+      const id = Number(c.dataset.id), v = visitedAt(id);
+      c.classList.toggle('hl', glowing(id));
+      c.querySelector('.visit').textContent = v ? '✓ visited ' + agoMs(v) : '';
     });
+    document.querySelectorAll('.reg').forEach(r => r.classList.toggle('hl', glowing(Number(r.dataset.id))));
   }
 
   /* ---------- data ---------- */
@@ -439,12 +468,12 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
   }
   async function loadData() {
     const d = await getJSON('/api/data');
-    if (d.me) { $('whoName').innerHTML = `Signed in as <b>${esc(d.me.name || 'player')}</b> [${d.me.uid}]`; }
+    if (d.me) { $('whoName').innerHTML = `<b>${esc(d.me.name || 'player')}</b> [${d.me.uid}]`; }
     const A = GCAgg.aggregate(d.purchases || [], d.items || {}); // added up here in the browser
     DATA = { sellers: A.sellers, purchases: A.count, first: A.first, last: A.last, lastUpload: d.lastUpload || 0 };
     lastUpload = DATA.lastUpload; skew = d.now - Date.now() / 1000;
-    const day = t => new Date(t * 1000).toISOString().slice(0, 10);
-    $('tagline').textContent = DATA.purchases ? `${fmt(DATA.purchases)} purchases · ${day(DATA.first)} to ${day(DATA.last)}` : 'Every bazaar you buy from, ranked';
+    const day = t => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    $('tagline').textContent = DATA.purchases ? `${fmt(DATA.purchases)} bazaar purchases since ${day(DATA.first)}` : 'Every bazaar you buy from';
   }
   async function poll() {
     try {
@@ -458,37 +487,35 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
         since = Math.max(since, t || 0, nt || 0);
       }
       if (j.lastUpload && j.lastUpload !== lastUpload) { await loadData(); render(); return; }
-      if (changed.length) patchRows(changed); else renderStatus();
+      if (changed.length) patchCards(changed); else renderStatus();
     } catch (e) { offline = true; renderStatus(); }
   }
 
-  /* ---------- check now ---------- */
-  // Sellers on screen right now (rows in view first, then the ones just below), at most 30.
+  /* ---------- check now: the bazaars on screen (sellers you bought from) ---------- */
   function idsOnScreen() {
-    const rows = [...document.querySelectorAll('#rows tr')];
+    const cards = [...document.querySelectorAll('.cardx')];
     const h = window.innerHeight;
-    let first = rows.findIndex(tr => { const r = tr.getBoundingClientRect(); return r.bottom > 0 && r.top < h; });
+    let first = cards.findIndex(c => { const r = c.getBoundingClientRect(); return r.bottom > 0 && r.top < h; });
     if (first < 0) first = 0;
-    return rows.slice(first, first + 30).map(tr => Number(tr.dataset.id));
+    return cards.slice(first, first + 30).map(c => Number(c.dataset.id));
   }
   async function checkNow() {
     const ids = idsOnScreen();
     if (!ids.length) return;
-    const btn = $('checkBtn'), msg = $('checkMsg');
+    const btn = $('checkBtn'), msg = $('checkMsg'), label = '⟳ Check now';
     btn.disabled = true; btn.textContent = 'Checking…'; msg.textContent = '';
     try {
       const j = await getJSON('/api/check-now', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
-      if (j.wait) { btn.textContent = `Wait ${j.wait}s`; setTimeout(() => { btn.textContent = 'Check now'; btn.disabled = false; }, j.wait * 1000); msg.textContent = ''; return; }
-      msg.textContent = j.error ? j.error : `Checked ${j.checked} sellers` + (j.partial ? ' (some skipped)' : '');
+      if (j.wait) { btn.textContent = `Wait ${j.wait}s`; setTimeout(() => { btn.textContent = label; btn.disabled = false; }, j.wait * 1000); return; }
+      msg.textContent = j.error ? j.error : `Checked ${j.checked} bazaars` + (j.partial ? ' (some skipped)' : '');
       await poll();
     } catch (e) { msg.textContent = 'Check failed: ' + e.message; }
-    btn.textContent = 'Check now'; btn.disabled = false;
+    btn.textContent = label; btn.disabled = false;
     setTimeout(() => { msg.textContent = ''; }, 8000);
   }
 
   /* ---------- events ---------- */
-  // A click starting on the table holds back background re-renders for a moment.
-  $('rows').addEventListener('pointerdown', () => { busyUntil = Date.now() + 1500; }, true);
+  ['rows', 'strip'].forEach(id => $(id).addEventListener('pointerdown', () => { busyUntil = Date.now() + 1500; }, true));
   let qT = null;
   $('q').addEventListener('input', e => { st.q = e.target.value; st.shown = PAGE; clearTimeout(qT); qT = setTimeout(render, 80); });
   document.addEventListener('keydown', e => {
@@ -500,6 +527,11 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
   });
   $('checkBtn').addEventListener('click', checkNow);
   $('moreBtn').addEventListener('click', () => { st.shown += PAGE; render(); });
+  // two sort boxes (toolbar on desktop, inside Filters on phones) kept in step
+  $('sort2').innerHTML = $('sort').innerHTML;
+  ['sort', 'sort2'].forEach(id => { $(id).value = st.sort; $(id).addEventListener('change', e => {
+    st.sort = e.target.value; ls.set('sort', st.sort); $('sort').value = $('sort2').value = st.sort; render();
+  }); });
   document.querySelectorAll('[data-baz]').forEach(b => b.addEventListener('click', () => {
     st.baz = b.dataset.baz; st.shown = PAGE;
     document.querySelectorAll('[data-baz]').forEach(x => x.setAttribute('aria-pressed', x === b)); render();
@@ -513,19 +545,12 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     const v = c.dataset.chip || null;
     st.chip = st.chip === v ? null : v; st.shown = PAGE; render();
   });
-  document.querySelector('thead').addEventListener('click', e => {
-    const th = e.target.closest('th[data-sort]'); if (!th) return;
-    const k = th.dataset.sort;
-    if (st.sort.key === k) st.sort.dir *= -1;
-    else st.sort = { key: k, dir: ['rank', 'name', 'bazaar'].includes(k) ? 1 : -1 };
-    render();
-  });
   const phoneQ = window.matchMedia('(max-width: 700px)');
-  const setPh = () => { $('q').placeholder = phoneQ.matches ? 'Search' : 'Search name, id or note  ( / )'; };
+  const setPh = () => { $('q').placeholder = phoneQ.matches ? 'Search' : 'Search a seller, id or note  ( / )'; };
   setPh(); if (phoneQ.addEventListener) phoneQ.addEventListener('change', setPh);
   $('span').value = String(span);
-  $('span').addEventListener('change', e => { span = Number(e.target.value); ls.set('span', span); refreshHighlights(); });
-  $('resetHl').addEventListener('click', () => { resetAt = Date.now(); ls.set('resetAt', resetAt); refreshHighlights(); });
+  $('span').addEventListener('change', e => { span = Number(e.target.value); ls.set('span', span); refreshGlow(); });
+  $('resetHl').addEventListener('click', () => { resetAt = Date.now(); ls.set('resetAt', resetAt); refreshGlow(); });
   let armT = null;
   $('clearVisits').addEventListener('click', e => {
     const b = e.currentTarget;
@@ -536,52 +561,48 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     }
     clearTimeout(armT); b.classList.remove('armed'); b.textContent = 'Clear visit marks';
     visits = {}; resetAt = 0; ls.set('visits', visits); ls.set('resetAt', 0);
-    if (st.visit !== 'any') render(); else refreshHighlights();
+    if (st.visit !== 'any' || st.sort === 'visit') render(); else refreshGlow();
   });
-  // Visiting a seller: click or middle-click on their name or id. Only this row's class changes.
+  // Visiting a seller: click or middle-click on their name, id or strip entry. Only classes and text change.
   function markVisit(e) {
     const a = e.target.closest('a.sl'); if (!a) return;
     if (e.type === 'auxclick' && e.button !== 1) return;
-    const tr = a.closest('tr'), id = Number(tr.dataset.id);
+    const holder = a.closest('[data-id]'), id = Number(holder.dataset.id);
     visits[id] = Date.now(); ls.set('visits', visits);
-    tr.classList.toggle('hl', highlighted(id));
-    tr.querySelector('.c-visit').textContent = agoMs(visits[id]);
+    refreshGlow();
   }
-  $('rows').addEventListener('click', markVisit);
-  $('rows').addEventListener('auxclick', markVisit);
-  // Notes: edit in place, saved in this browser.
+  ['rows', 'strip'].forEach(id => { $(id).addEventListener('click', markVisit); $(id).addEventListener('auxclick', markVisit); });
+  // Notes: edit in place on the card, saved in this browser.
   $('rows').addEventListener('click', e => {
     const b = e.target.closest('[data-note]'); if (!b) return;
-    const id = Number(b.dataset.note), td = b.closest('td');
-    if (td.querySelector('.noteedit')) return;
-    const old = td.querySelector('.note'); if (old) old.hidden = true;
+    const id = Number(b.dataset.note), card = b.closest('.cardx');
+    if (card.querySelector('.noteedit')) return;
+    const old = card.querySelector('.note'); if (old) old.hidden = true;
     const inp = document.createElement('input');
-    inp.className = 'noteedit'; inp.maxLength = 200; inp.value = notes[id] || ''; inp.placeholder = 'Note, e.g. "cheap plushies, restocks Sundays"';
-    td.appendChild(inp); inp.focus();
+    inp.className = 'noteedit'; inp.maxLength = 200; inp.value = notes[id] || ''; inp.placeholder = 'e.g. "cheap plushies, restocks Sundays"';
+    card.appendChild(inp); inp.focus();
     let done = false;
     const finish = save => {
       if (done) return; done = true;
       if (save) { const v = inp.value.trim(); if (v) notes[id] = v; else delete notes[id]; ls.set('notes', notes); }
       inp.remove();
       const n = notes[id];
-      let div = td.querySelector('.note');
-      if (n) { if (!div) { div = document.createElement('div'); div.className = 'note'; td.appendChild(div); } div.textContent = n; div.hidden = false; }
+      let div = card.querySelector('.note');
+      if (n) { if (!div) { div = document.createElement('div'); div.className = 'note'; card.appendChild(div); } div.textContent = n; div.hidden = false; }
       else if (div) div.remove();
-      b.classList.toggle('has', !!n); b.title = n ? 'Edit note' : 'Add a note';
+      b.textContent = n ? '✎ edit note' : '✎ add note';
     };
     inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
     inp.addEventListener('blur', () => finish(true));
   });
-  window.addEventListener('scroll', () => { $('bartop').classList.toggle('stuck', window.scrollY > 60); }, { passive: true });
+  window.addEventListener('scroll', () => { $('bartop').classList.toggle('stuck', window.scrollY > 120); }, { passive: true });
   window.addEventListener('storage', e => {
-    if (e.key === 'gc_visits') { visits = ls.get('visits', {}); refreshHighlights(); }
+    if (e.key === 'gc_visits') { visits = ls.get('visits', {}); refreshGlow(); }
     if (e.key === 'gc_notes') { notes = ls.get('notes', {}); renderSoon(); }
   });
 
   /* ---------- sign in ---------- */
-  function showApp(on) {
-    $('login').hidden = on; $('app').hidden = !on; $('who').hidden = !on; $('statusline').hidden = !on;
-  }
+  function showApp(on) { $('login').hidden = on; $('app').hidden = !on; $('who').hidden = !on; }
   function signedOut() {
     token = null; ls.set('token', null);
     DATA = EMPTY; STATUS.clear(); since = 0;
@@ -595,7 +616,7 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     if (started) return;
     started = true;
     setInterval(() => { if (!document.hidden && token) poll(); }, 8000);
-    setInterval(refreshHighlights, 20000);
+    setInterval(refreshGlow, 20000);
     setInterval(() => { if (!document.hidden && token) renderStatus(); }, 5000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden && token) poll(); });
   }
@@ -606,7 +627,7 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     try {
       const j = await getJSON('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
       if (!j.token) throw new Error(j.error || 'Sign in failed');
-      token = j.token; ls.set('token', token); $('key').value = '';
+      token = j.token; ls.set('token', token);
       await start();
     } catch (err) { $('loginMsg').textContent = err.message; }
     $('key').value = ''; $('loginBtn').disabled = false;

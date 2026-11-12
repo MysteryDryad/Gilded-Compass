@@ -1,7 +1,7 @@
 # Gilded Compass: handoff
 
 A Torn seller directory (based on the "Torn Seller Directory" build brief) for **any player**: install the userscript, sign in with your own Torn key, see only your own bazaar purchases.
-Our touches: the Gilded Compass name, a dark/gold theme, notes per seller.
+Our own design (not a copy of the original table): Compass cards, gold seals, item icons, the regulars strip, notes per seller, navy/gold theme (light follows the device).
 Tests: `node test.js` (no installs). All work and pushes go to `main`.
 
 ## Rules
@@ -18,7 +18,7 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 | `src/worker.js` | Worker for `/api/*` only (the page is served straight from `public/`). |
 | `src/logic.mjs` | Pure Worker logic (bazaar reply parsing, scheduling, validation, tokens). Tested in `test.js`. |
 | `public/aggregate.js` | Totals per seller and item type, run **in the browser** (free Workers get ~10 ms CPU per request). Tested in `test.js`: 23k purchases in ~25 ms. |
-| `public/index.html` | The page (one file, no build). Sign-in screen with Torn's API-key disclosure table, then the directory. |
+| `public/index.html` | The page (no build). Sign-in screen with Torn's API-key disclosure table, then the **Compass cards** design: an "Open now · your regulars" strip (your top 50 that are open), a sticky search / sort / Check now bar, a one-line summary, item-type chips with icons, and one card per seller (rank, gold seal: filled = open, hollow = closed, dashed = not checked yet; top item types as icons; buys, items, spent; visit glow; note). |
 | `public/_headers` | Security headers for the page. |
 | `wrangler.toml` | Assets, D1 binding, cron every minute. |
 | `schema.sql` | Copy of the tables (the Worker creates them itself). |
