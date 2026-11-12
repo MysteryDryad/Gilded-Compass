@@ -48,6 +48,11 @@ With many users the 36 calls a minute are shared, so checks just get less freque
 Playwright: sign-in screen, desktop, phone (no sideways scroll), arriving from 🧭 signed in, and the userscript end to end.
 **Not yet tested against real Torn data**: on the first real run, use the userscript's "Copy debug sample" and `/api/probe`.
 
+## Repo hygiene
+- The repo was recreated on 2026-11-12 so no old commit carries a personal email address. Commits use no-reply addresses only
+  (GitHub setting "Keep my email addresses private" is on). Never commit keys, tokens, passwords or email addresses.
+- Cloudflare Workers Builds is connected to this repo (branch `main`); every push deploys. Only `main` is pushed.
+
 ## Deploy (no PowerShell): Cloudflare dashboard + GitHub
 1. D1: Storage & Databases > D1 > Create `gilded-compass`; put its id in `wrangler.toml` (`database_id`).
 2. Workers & Pages > Create > Import a repository > this repo, branch `main` (Workers Builds deploys on every push).
