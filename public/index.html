@@ -399,7 +399,7 @@ footer { color: var(--muted); font-size: 12px; padding: 0 0 30px; text-align: ce
     $('rows').innerHTML = shown.map(x => cardHtml(x, maxP)).join('');
     $('empty').hidden = !!shown.length;
     $('empty').innerHTML = !DATA.sellers.length
-      ? 'No purchases yet. Install the <b>🧭 Gilded Compass</b> userscript and open Torn: it sends your bazaar purchases here.'
+      ? 'No purchases here yet. If you just set up the <b>🧭 Gilded Compass</b> userscript, they are on their way: this page fills in by itself as they arrive. If not, install the userscript and open Torn.'
       : 'No sellers match these filters.';
     $('moreBtn').hidden = list.length <= st.shown;
     $('moreBtn').textContent = `Show ${Math.min(PAGE, list.length - st.shown)} more`;

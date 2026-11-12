@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.3.5
+// @version      0.3.6
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -41,7 +41,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.3.5'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.3.6'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -218,7 +218,8 @@
   /* ===================== sync: log -> site ===================== */
   // Newest first. The first sync reads all history; later ones only read entries newer than the last one.
   // Progress is saved every page, so a stopped read carries on next time.
-  async function readLog() {
+  // onChunk: called whenever 1,000 purchases are waiting, so the site fills in while a long first read is still going.
+  async function readLog(onChunk) {
     const ids = await ensureLogIds();
     const r = state.resume;
     const from = r ? r.from : (state.lastSync ? state.lastSync + 1 : 0);
@@ -249,6 +250,8 @@
       to = oldest;
       state.resume = { from, to, newest, seen };
       save();
+      setStatus(`Reading your log… ${added.toLocaleString('en-US')} purchases found so far`);
+      if (onChunk && Object.keys(state.pending).length >= CHUNK) await onChunk();
       await sleep(PAUSE);
     }
     state.lastSync = newest; state.resume = null;
@@ -288,10 +291,10 @@
       mergeShared(); // carry on from where another page (e.g. the Gilded Compass page in PDA) got to
       // Self-repair: if the site holds none of your purchases (for example after "Delete my data"), read the whole log again.
       if (state.lastSync && !state.resume && !Object.keys(state.pending).length && await siteCount() === 0) { state.lastSync = 0; save(); }
-      const { added, sellers } = await readLog();
+      const { added, sellers } = await readLog(sendToSite);
       if (Object.keys(state.pending).length) await sendToSite();
       else await token();
-      state.lastError = null; state.syncedAt = Date.now(); shareSync();
+      state.lastError = null; state.syncedAt = Date.now(); shareSync(); setStatus('');
       setBtn('ok', added ? `Sent ${added} new purchase${added === 1 ? '' : 's'}` : 'Up to date');
       return { added, sellers };
     } catch (e) {
@@ -349,12 +352,23 @@
       ${IN_PDA && !usingPda ? '<button data-act="usepda">Use Torn PDA\'s key</button>' : ''}
       <div id="gc-msg">${msg.text ? `<div class="${msg.ok ? 'gc-ok' : 'gc-err'}">${esc(msg.text)}</div>` : state.lastError ? `<div class="gc-err">Last sync: ${esc(state.lastError)}</div>` : ''}</div>
       <button data-act="save" class="gc-gold">Save and sign in</button>
-      <p class="gc-note">${state.sent ? `${state.sent.toLocaleString('en-US')} purchases sent so far` : 'Nothing sent yet'}${state.syncedAt ? ', last sync ' + new Date(state.syncedAt).toLocaleString() : ''}.</p>
+      <p class="gc-note" id="gc-status">${statusText()}</p>
       <details>
         <summary>More options</summary>
         <button data-act="debug">Copy debug sample</button> <button data-act="resetpos">Reset 🧭 position</button>
       </details>
       <p class="gc-note">Read-only: never acts in the game. Your key stays on this device; it goes to api.torn.com, and once to the Gilded Compass site to confirm who you are (not stored there).</p>`;
+  }
+  function statusText() {
+    return (state.sent ? `${state.sent.toLocaleString('en-US')} purchases sent so far` : 'Nothing sent yet')
+      + (state.syncedAt ? ', last sync ' + new Date(state.syncedAt).toLocaleString() : '') + '.';
+  }
+  // Live progress in the settings card (if it is open) and on the 🧭 button's label.
+  function setStatus(text) {
+    const el = typeof document !== 'undefined' && document.getElementById('gc-status');
+    if (el) el.textContent = text || statusText();
+    const b = typeof document !== 'undefined' && document.getElementById('gc-btn');
+    if (b && text) b.title = 'Gilded Compass: ' + text;
   }
   // Messages update in place, so whatever was typed in the boxes stays.
   function setMsg(text, ok) {
@@ -374,6 +388,9 @@
     if (act === 'save') {
       const key = (document.getElementById('gc-key').value || '').trim() || cfg.key();
       if (!key) { setMsg('Paste your Torn API key first.', false); return; }
+      // Phones only allow a new tab straight after a tap, so open it now and fill it in once signed in.
+      let tab = null;
+      if (!IN_PDA) { try { tab = window.open('', '_blank'); if (tab) tab.document.write('<p style="font:16px system-ui;padding:24px;color:#9a7412">Signing you in to Gilded Compass…</p>'); } catch (e) { /* blocked */ } }
       el.disabled = true; el.textContent = 'Checking…';
       try {
         await api('user/log', { limit: 1 }, key); // the log is the part that needs the right access
@@ -381,12 +398,19 @@
         if (key !== (IN_PDA ? PDA_KEY : '')) sset('apikey', key);
         state.needsSetup = false; state.lastError = null; save();
         const me = sget('me', {});
-        setMsg(`All good${me.name ? ', ' + me.name : ''}. Syncing now; tap 🧭 to open your list.`, true);
-        run('tap');
-      } catch (e) { setMsg(hideKey(e.message || e), false); }
+        run('tap'); // starts sending your purchases; your list fills in as they arrive
+        if (openSite(tab)) {
+          setMsg(`All good${me.name ? ', ' + me.name : ''}. Your list is opening; it fills in while your purchases are sent.`, true);
+          setTimeout(() => { const p = document.getElementById('gc-setup'); if (p) p.hidden = true; }, 2500);
+        } else showOpenLink(`All good${me.name ? ', ' + me.name : ''}. Your purchases are being sent.`);
+      } catch (e) {
+        if (tab && !tab.closed) { try { tab.close(); } catch (x) { /* ignore */ } }
+        setMsg(hideKey(e.message || e), false);
+      }
       el.disabled = false; el.textContent = 'Save and sign in';
       return;
     }
+    if (act === 'open') { setTimeout(() => { document.getElementById('gc-setup').hidden = true; }, 300); return; } // the link itself opens the site
     if (act === 'resetpos') {
       sset(posKey(), null);
       const b = document.getElementById('gc-btn'); if (b) placeBtn(b, defaultPos());
@@ -414,13 +438,29 @@
   }
 
   // Tap: open the site in a new tab (and sync). Not set up yet, or a problem: settings.
+  const siteUrl = () => { const t = sget('token', ''); return cfg.site() + '/' + (t ? '#t=' + t : ''); }; // the token after # never reaches any server log
+  // Opens the site in a new tab (or in a tab opened earlier, while the tap was still fresh). Returns false if the phone blocked it.
+  function openSite(tab) {
+    const url = siteUrl();
+    if (tab && !tab.closed) { try { tab.location.href = url; tab.opener = null; return true; } catch (e) { /* fall through */ } }
+    const w = window.open(url, '_blank');
+    if (w) { try { w.opener = null; } catch (e) { /* ignore */ } return true; }
+    return false;
+  }
+  // When a new tab can't be opened automatically, a plain link always works.
+  function showOpenLink(text) {
+    const p = document.getElementById('gc-setup');
+    if (p && p.hidden) openSetup();
+    setMsg(text, true);
+    const m = document.getElementById('gc-msg');
+    if (m) m.insertAdjacentHTML('beforeend', `<a class="gc-a gc-gold" data-act="open" href="${esc(siteUrl())}" target="_blank" rel="noopener" style="text-align:center">Open my list →</a>`);
+  }
   function tap() {
     if (!cfg.ready() || state.needsSetup) { openSetup(); return; }
-    const t = sget('token', '');
-    const url = cfg.site() + '/' + (t ? '#t=' + t : ''); // the token after # never reaches any server log
-    const w = window.open(url, '_blank');
-    if (w) { try { w.opener = null; } catch (e) { /* ignore */ } }
-    else if (!IN_PDA) location.href = url; // pop-up blocked: open it here instead
+    if (!openSite()) {
+      if (IN_PDA) showOpenLink('Tap below to open your list.');
+      else location.href = siteUrl(); // pop-up blocked: open it here instead
+    }
     run('tap');
   }
   // Phone and computer layouts differ, so each remembers its own spot.
