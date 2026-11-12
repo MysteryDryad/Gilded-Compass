@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.3.2
+// @version      0.3.3
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -23,6 +23,7 @@
  *
  * What it does
  * - 🧭 button on Torn: tap opens the Gilded Compass site, signed in as you. Hold it (or use the Tampermonkey menu) for settings.
+ *   Drag it anywhere (phone and computer); where you leave it is remembered.
  * - In the background (when you tap 🧭, and every 15 minutes while Torn is open) it reads YOUR new "Bazaar buy"
  *   log entries (bazaar purchases only) and sends them to the site, where only you can see them.
  *
@@ -38,7 +39,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.3.2'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.3.3'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -257,7 +258,8 @@
 
   /* ===================== UI: the 🧭 button and a one-time setup card ===================== */
   const CSS = `
-  #gc-btn{position:absolute;z-index:2147483645;cursor:pointer;font:700 15px/1 Arial;padding:4px 7px;border-radius:8px;border:1px solid #8a7330;background:#111a2e;color:#d4af37;touch-action:none;-webkit-user-select:none;user-select:none}
+  #gc-btn{position:absolute;z-index:2147483645;cursor:pointer;font:700 15px/1 Arial;padding:4px 7px;border-radius:8px;border:1px solid #8a7330;background:#111a2e;color:#d4af37;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  #gc-btn.drag{cursor:grabbing;opacity:.85;box-shadow:0 0 0 3px rgba(212,175,55,.35)}
   #gc-btn.busy{animation:gc-p 1.2s ease-in-out infinite}
   #gc-btn.err:after{content:"";position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:#e0605a;border:1px solid #111a2e}
   @keyframes gc-p{50%{box-shadow:0 0 0 4px rgba(212,175,55,.35)}}
@@ -295,7 +297,7 @@
       <div id="gc-msg">${msg.text ? `<div class="${msg.ok ? 'gc-ok' : 'gc-err'}">${esc(msg.text)}</div>` : state.lastError ? `<div class="gc-err">Last sync: ${esc(state.lastError)}</div>` : ''}</div>
       <button data-act="save" class="gc-gold">Save and sign in</button>
       <p class="gc-note">${state.sent ? `${state.sent.toLocaleString('en-US')} purchases sent so far` : 'Nothing sent yet'}${state.syncedAt ? ', last sync ' + new Date(state.syncedAt).toLocaleString() : ''}.</p>
-      <button data-act="resend">Re-send all purchases</button> <button data-act="debug">Copy debug sample</button>
+      <button data-act="resend">Re-send all purchases</button> <button data-act="debug">Copy debug sample</button> <button data-act="resetpos">Reset 🧭 position</button>
       <p class="gc-note">Read-only: never acts in the game. Your key stays on this device; it goes to api.torn.com, and once to the Gilded Compass site to confirm who you are (not stored there).</p>`;
   }
   // Messages update in place, so whatever was typed in the boxes stays.
@@ -337,6 +339,12 @@
       run('tap');
       return;
     }
+    if (act === 'resetpos') {
+      sset(posKey(), null);
+      const b = document.getElementById('gc-btn'); if (b) placeBtn(b, defaultPos());
+      el.textContent = 'Moved back ✔'; setTimeout(() => { el.textContent = 'Reset 🧭 position'; }, 2000);
+      return;
+    }
     if (act === 'debug') {
       const sample = { version: VERSION, inPDA: IN_PDA, usingPdaKey: IN_PDA && !sget('apikey', ''), signedIn: !!sget('token', ''), logTypes: state.logTypesSeen || null,
         logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
@@ -367,13 +375,16 @@
     else if (!IN_PDA) location.href = url; // pop-up blocked: open it here instead
     run('tap');
   }
+  // Phone and computer layouts differ, so each remembers its own spot.
+  const posKey = () => (window.innerWidth < 700 ? 'btnpos_phone' : 'btnpos');
+  const defaultPos = () => (window.innerWidth < 700 ? { left: 164, top: 4 } : { left: Math.max(8, window.innerWidth - 160), top: 8 }); // phone: next to Arbitrage's 💰
   function placeBtn(b, pos) {
-    const de = document.documentElement;
-    b.style.left = Math.min(Math.max(0, pos.left), Math.max(0, de.scrollWidth - 40)) + 'px';
-    b.style.top = Math.min(Math.max(0, pos.top), Math.max(0, de.scrollHeight - 40)) + 'px';
+    const de = document.documentElement, w = b.offsetWidth || 36, h = b.offsetHeight || 28;
+    b.style.left = Math.min(Math.max(0, pos.left), Math.max(0, de.scrollWidth - w)) + 'px';
+    b.style.top = Math.min(Math.max(0, pos.top), Math.max(0, de.scrollHeight - h)) + 'px';
   }
-  // Tap opens the site; hold 0.6 s for settings; on PC, drag to move (position remembered).
-  function attachPointer(b, draggable) {
+  // Tap opens the site; hold 0.6 s (without moving) for settings; drag to move it anywhere, on phones too.
+  function attachPointer(b) {
     let sx = 0, sy = 0, ox = 0, oy = 0, moved = false, down = false, held = false, timer = null;
     b.addEventListener('pointerdown', ev => {
       ev.stopPropagation(); down = true; moved = false; held = false; sx = ev.clientX; sy = ev.clientY;
@@ -382,19 +393,24 @@
       try { b.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
     });
     b.addEventListener('pointermove', ev => {
-      if (!down || !draggable) return;
+      if (!down || held) return;
       const dx = ev.clientX - sx, dy = ev.clientY - sy;
       if (!moved && Math.hypot(dx, dy) < 8) return;
-      moved = true; clearTimeout(timer); placeBtn(b, { left: ox + dx, top: oy + dy });
+      if (!moved) { moved = true; clearTimeout(timer); b.classList.add('drag'); }
+      ev.preventDefault();
+      placeBtn(b, { left: ox + dx, top: oy + dy });
     });
-    b.addEventListener('pointerup', ev => {
+    const end = ev => {
       ev.stopPropagation(); clearTimeout(timer); if (!down) return; down = false;
-      if (moved) { const r = b.getBoundingClientRect(); sset('btnpos', { left: r.left + window.pageXOffset, top: r.top + window.pageYOffset }); }
-      else if (!held) tap();
-    });
-    b.addEventListener('pointercancel', () => { clearTimeout(timer); down = false; });
+      b.classList.remove('drag');
+      if (moved) { const r = b.getBoundingClientRect(); sset(posKey(), { left: r.left + window.pageXOffset, top: r.top + window.pageYOffset }); }
+      else if (!held && ev.type === 'pointerup') tap();
+    };
+    b.addEventListener('pointerup', end);
+    b.addEventListener('pointercancel', end);
     b.addEventListener('contextmenu', ev => ev.preventDefault());
     ['mousedown', 'touchstart', 'click'].forEach(t => b.addEventListener(t, ev => { ev.stopPropagation(); if (t === 'click') ev.preventDefault(); }));
+    b.addEventListener('touchmove', ev => { if (down) ev.preventDefault(); }, { passive: false }); // keep the page still while dragging
   }
   function mount() {
     if (!document.body) return;
@@ -406,10 +422,10 @@
     }
     if (!document.getElementById('gc-btn')) {
       const b = document.createElement('button'); b.id = 'gc-btn'; b.textContent = '🧭';
-      const phone = window.innerWidth < 700;
-      placeBtn(b, phone ? { left: 164, top: 4 } : (sget('btnpos', null) || { left: Math.max(8, window.innerWidth - 160), top: 8 })); // phone: next to Arbitrage's 💰
-      attachPointer(b, !phone);
+      attachPointer(b);
       document.body.appendChild(b);
+      placeBtn(b, sget(posKey(), null) || defaultPos());
+      window.addEventListener('resize', () => placeBtn(b, sget(posKey(), null) || defaultPos()));
       setBtn(state.lastError ? 'err' : 'ok', state.lastError || '');
     }
   }
