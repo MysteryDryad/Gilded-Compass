@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.3.3
+// @version      0.3.4
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -39,7 +39,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.3.3'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.3.4'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -117,7 +117,7 @@
     if (r.status === 429 || r.status >= 500) throw Object.assign(new Error('Torn is busy (HTTP ' + r.status + ').'), { rate: true });
     let j; try { j = JSON.parse(r.text); } catch (e) { throw new Error('Bad API response (HTTP ' + (r && r.status) + ')'); }
     const er = j && j.error;
-    if (er && er.code === 16) throw Object.assign(new Error('Your Torn key does not have enough access. Reading your log needs a Custom key with the user log ticked ("Create the key for me"), or a Full Access key; a Limited Access key is refused.'), { code: 16 });
+    if (er && er.code === 16) throw Object.assign(new Error('This key can\'t read your log (Public and Limited keys can\'t). Tap "Create the key for me", make that key, then paste it here.'), { code: 16 });
     if (er && er.code === 2) throw Object.assign(new Error('Torn rejected the API key as incorrect.'), { code: 2 });
     if (er && er.code === 5) throw Object.assign(new Error('Torn is limiting requests (too many in one minute).'), { rate: true, code: 5 });
     if (er) throw Object.assign(new Error('Torn API: ' + (er.error || er.code) + ' (code ' + er.code + ')'), { code: er.code });
@@ -275,6 +275,11 @@
   #gc-setup .gc-note{color:#9aa3b5;font-size:12px;margin:8px 0 0}
   #gc-setup .gc-err{color:#ff8a65;margin-top:8px}
   #gc-setup .gc-ok{color:#4fd184;margin-top:8px}
+  #gc-setup details{margin-top:12px;border-top:1px solid #26324f;padding-top:8px}
+  #gc-setup summary{cursor:pointer;color:#9aa3b5;font-size:13px;list-style:none}
+  #gc-setup summary::-webkit-details-marker{display:none}
+  #gc-setup summary:before{content:"▸ ";color:#d4af37}
+  #gc-setup details[open] summary:before{content:"▾ "}
   `;
   let msg = { text: '', ok: true };
 
@@ -297,7 +302,10 @@
       <div id="gc-msg">${msg.text ? `<div class="${msg.ok ? 'gc-ok' : 'gc-err'}">${esc(msg.text)}</div>` : state.lastError ? `<div class="gc-err">Last sync: ${esc(state.lastError)}</div>` : ''}</div>
       <button data-act="save" class="gc-gold">Save and sign in</button>
       <p class="gc-note">${state.sent ? `${state.sent.toLocaleString('en-US')} purchases sent so far` : 'Nothing sent yet'}${state.syncedAt ? ', last sync ' + new Date(state.syncedAt).toLocaleString() : ''}.</p>
-      <button data-act="resend">Re-send all purchases</button> <button data-act="debug">Copy debug sample</button> <button data-act="resetpos">Reset 🧭 position</button>
+      <details>
+        <summary>More options</summary>
+        <button data-act="resend">Re-send all purchases</button> <button data-act="debug">Copy debug sample</button> <button data-act="resetpos">Reset 🧭 position</button>
+      </details>
       <p class="gc-note">Read-only: never acts in the game. Your key stays on this device; it goes to api.torn.com, and once to the Gilded Compass site to confirm who you are (not stored there).</p>`;
   }
   // Messages update in place, so whatever was typed in the boxes stays.
