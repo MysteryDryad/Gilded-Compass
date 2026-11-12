@@ -25,24 +25,32 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
     U.isFromBazaar({ details: { id: 4 } }, [1225])], [true, false, true, false]);
 
   /* ---------- worker logic ---------- */
+  /* ---------- totals (public/aggregate.js, runs in the browser) ---------- */
+  const G = require('./public/aggregate.js');
   const items = { 186: ['Sheep Plushie', 'Plushie'], 260: ['Dahlia', 'Flower'] };
-  const rows = [
-    { seller: 55, ts: 100, items: '[[186,3]]', ce: 1, ct: 3 },              // $1 plushies
-    { seller: 55, ts: 200, items: '[[260,4]]', ce: null, ct: 1000 },        // only total: 250 each
-    { seller: 77, ts: 300, items: [[260, 10]], ce: 500, ct: null },
-    { seller: 88, ts: 50, items: [[186, 1], [260, 2]], ce: 2000, ct: null }  // two types in one purchase
+  const rows = [            // [ts, seller, items, cost_each, cost_total]
+    [100, 55, [[186, 3]], 1, 3],             // $1 plushies
+    [200, 55, [[260, 4]], null, 1000],       // only total: 250 each
+    [300, 77, [[260, 10]], 500, null],
+    [50, 88, [[186, 1], [260, 2]], 2000, null] // two types in one purchase
   ];
-  eq('each price from total', L.eachPrice(rows[1]), 250);
-  const A = L.aggregate(rows, items);
+  eq('each price from total', G.eachPrice(rows[1][2], rows[1][3], rows[1][4]), 250);
+  const A = G.aggregate(rows, items);
   eq('rank by purchases then items', A.sellers.map(s => s.id), [55, 77, 88]);
   const s55 = A.sellers[0];
   eq('seller totals [purchases, items, spent]', s55.tot, [2, 7, 1003]);
   eq('seller last purchase', s55.last, 200);
   eq('per type', [s55.t.Plushie, s55.t.Flower], [[1, 3, 3], [1, 4, 1000]]);
-  eq('$1 pseudo type (not double counted in tot)', s55.t[L.ONE_DOLLAR], [1, 3, 3]);
+  eq('$1 pseudo type (not double counted in tot)', s55.t[G.ONE], [1, 3, 3]);
   eq('two types in one purchase count once each', [A.sellers[2].tot[0], A.sellers[2].t.Plushie[0], A.sellers[2].t.Flower[0]], [1, 1, 1]);
-  eq('type totals for chips', A.typeTotals, { Plushie: 4, [L.ONE_DOLLAR]: 3, Flower: 16 });
-  eq('unknown item type', Object.keys(L.aggregate([{ seller: 1, ts: 1, items: [[999, 1]], ce: 5 }], items).sellers[0].t), ['Unknown']);
+  eq('date range and count', [A.first, A.last, A.count], [50, 300, 4]);
+  eq('unknown item type', Object.keys(G.aggregate([[1, 1, [[999, 1]], 5, null]], items).sellers[0].t), ['Unknown']);
+  { // speed: a big history like the reference (23k purchases, ~5k sellers) adds up quickly in a browser
+    const big = []; for (let i = 0; i < 23094; i++) big.push([1780000000 + i, 1000 + (i % 4944), [[i % 2 ? 186 : 260, 1 + (i % 5)]], i % 9 ? 1500 : 1, null]);
+    const t0 = Date.now(); const B = G.aggregate(big, items); const ms = Date.now() - t0;
+    eq('23k purchases -> 4944 sellers', B.sellers.length, 4944);
+    console.log('     (added up 23,094 purchases in ' + ms + ' ms)');
+  }
 
   eq('bazaar open', L.parseBazaar({ bazaar_is_open: true, bazaar_exists: true, bazaar: [] }), { is_open: 1, has_bazaar: 1 });
   eq('bazaar closed', L.parseBazaar({ bazaar_is_open: false, bazaar_exists: true }), { is_open: 0, has_bazaar: 1 });

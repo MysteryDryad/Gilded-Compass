@@ -16,16 +16,26 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 |---|---|
 | `gilded-compass.user.js` | Userscript (Torn PDA + Tampermonkey). Settings: the Torn key only (Custom with log, or PDA's key). Signs in to the site, reads the bazaar-buy log (incremental, resumable) and POSTs purchases. 🧭 tap opens `SITE/#t=<token>` (signed in); hold for settings. **Set `SITE` after the first deploy.** |
 | `src/worker.js` | Worker for `/api/*` only (the page is served straight from `public/`). |
-| `src/logic.mjs` | Pure logic (aggregation, bazaar reply parsing, scheduling, validation, tokens). Tested in `test.js`. |
+| `src/logic.mjs` | Pure Worker logic (bazaar reply parsing, scheduling, validation, tokens). Tested in `test.js`. |
+| `public/aggregate.js` | Totals per seller and item type, run **in the browser** (free Workers get ~10 ms CPU per request). Tested in `test.js`: 23k purchases in ~25 ms. |
 | `public/index.html` | The page (one file, no build). Sign-in screen with Torn's API-key disclosure table, then the directory. |
 | `public/_headers` | Security headers for the page. |
 | `wrangler.toml` | Assets, D1 binding, cron every minute. |
 | `schema.sql` | Copy of the tables (the Worker creates them itself). |
 
 ## API
-`POST /api/login {key}`, `POST /api/logout`, `GET /api/me`, `GET /api/data` (my sellers aggregated per type incl. "$1 items"),
+`POST /api/login {key}`, `POST /api/logout`, `GET /api/me`, `GET /api/data` (my raw purchases `[ts, seller, items, cost_each, cost_total]` plus Torn's item list, built as JSON by D1 in chunks of 20k rows; the page adds them up),
 `GET /api/status?since=` (my sellers' flags and names changed since), `POST /api/check-now {ids}` (my sellers only, at most 30, JSON, same Origin, 30 s per user, at most 30 lookups per 30 s for everyone),
 `POST /api/purchases {buys}` (idempotent by log id), `POST /api/forget` (delete all my data), `GET /api/probe` (raw Torn bazaar replies for my top 3 sellers).
+
+## Keeping the free Worker light
+Big replies (`/api/data`, `/api/status`) are built as JSON text inside D1 (`json_group_array`) and only glued together in the Worker.
+The top-100 ranking after an upload is one SQL statement. Tested with a history the size of the reference (23,094 purchases, ~4,900 sellers):
+`/api/data` is about 880 KB (compressed by Cloudflare), uploads of 1,000 take under 50 ms, and the page loads in under a second.
+
+## Keys
+Reading logs needs a **Custom key with log ticked** (or Full). Public and Limited keys are refused by Torn for logs (Arbitrage found Limited gets code 16).
+Signing in to the site works with any key, Public included (only `user/basic` is used).
 
 ## Cron (every minute)
 One D1 read batch, then up to 36 Torn calls with the site key, 10 in parallel: Torn item list weekly, up to 12 name lookups while names are missing, then the most overdue bazaar checks.

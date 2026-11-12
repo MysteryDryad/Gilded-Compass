@@ -4,7 +4,7 @@
 // - Each user's bazaar purchases (sent by the userscript) are stored under their player id and only shown to them.
 // - A cron job keeps bazaar Open/Closed flags and usernames fresh with the site's own Public key (TORN_API_KEY).
 import {
-  aggregate, byRank, parseBazaar, parseName, pickDue, validIds, validBuy, kindOf, newToken, sha256hex, bearer, looksLikeKey,
+  parseBazaar, parseName, pickDue, validIds, validBuy, newToken, sha256hex, bearer, looksLikeKey,
   TOP_TIER, MAX_TORN_PER_RUN, PARALLEL, MAX_NAMES_PER_RUN
 } from './logic.mjs';
 
@@ -25,10 +25,14 @@ const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owne
 const SESSION_DAYS = 180;
 const USER_COOLDOWN = 30;      // seconds between one user's Check now presses
 const CHECK_WINDOW = 30;       // all users together: at most 30 Check now lookups per 30 s (cron adds 36/min: under Torn's 100/min)
-const MAX_SELLERS_PER_USER = 5000;
+const CHUNK_ROWS = 20000; // purchases per database read (keeps each reply well under D1's 2 MB limit)
 const now = () => Math.floor(Date.now() / 1000);
 const HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: HEADERS });
+// Free Workers get about 10 ms of CPU per request, so big replies are built as JSON text by the database
+// and only glued together here (no parsing or looping over thousands of rows).
+const rawJson = text => new Response(text, { headers: HEADERS });
+const inner = arr => (arr && arr.length > 2 ? arr.slice(1, -1) : ''); // "[a,b]" -> "a,b"
 
 async function withSchema(env, fn) {
   try { return await fn(); }
@@ -166,29 +170,33 @@ async function login(req, env) {
 }
 
 /* ---------- the user's data ---------- */
+// Raw purchases [ts, seller, items, cost_each, cost_total] plus Torn's item list; the browser adds them up.
 async function getData(env, me) {
-  const [p, items, u] = await env.DB.batch([
-    env.DB.prepare('SELECT ts, seller, items, ce, ct FROM purchases WHERE uid = ?1').bind(me.uid),
-    metaGet(env, 'items'),
-    env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid)
-  ]);
-  const { sellers, typeTotals } = aggregate(p.results, JSON.parse(firstV(items) || '{}'));
-  return { me, sellers, typeTotals, purchases: p.results.length, lastUpload: Number(firstV(u)) || 0, now: now() };
+  const parts = [];
+  let after = 0;
+  for (;;) {
+    const r = await env.DB.prepare(`SELECT json_group_array(json_array(ts, seller, json(items), ce, ct)) AS j, MAX(r) AS last, COUNT(*) AS n FROM
+        (SELECT rowid AS r, ts, seller, items, ce, ct FROM purchases WHERE uid = ?1 AND rowid > ?2 ORDER BY rowid LIMIT ?3)`)
+      .bind(me.uid, after, CHUNK_ROWS).first();
+    if (r && r.n) parts.push(inner(r.j));
+    if (!r || r.n < CHUNK_ROWS) break;
+    after = r.last;
+  }
+  const [items, u] = await env.DB.batch([metaGet(env, 'items'), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid)]);
+  return rawJson(`{"me":${JSON.stringify(me)},"purchases":[${parts.filter(Boolean).join(',')}],"items":${firstV(items) || '{}'},` +
+    `"lastUpload":${Number(firstV(u)) || 0},"now":${now()}}`);
 }
 // Only this user's sellers, only rows changed since `since`.
 async function getStatus(env, me, since) {
   const [rows, err, cronAt, u] = await env.DB.batch([
-    env.DB.prepare(`SELECT id, is_open, has_bazaar, missing, t, name, name_t FROM status s
+    env.DB.prepare(`SELECT json_group_array(json_array(id, is_open, has_bazaar, missing, t, name, name_t)) AS v FROM status s
                     WHERE ((s.t >= ?2 AND s.t > 0) OR (s.name_t >= ?2 AND s.name_t > 0))
                       AND EXISTS (SELECT 1 FROM user_sellers us WHERE us.uid = ?1 AND us.seller = s.id)`).bind(me.uid, since),
     metaGet(env, 'error'), metaGet(env, 'cronAt'),
     env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid)
   ]);
-  return {
-    rows: rows.results.map(r => [r.id, r.is_open, r.has_bazaar, r.missing, r.t, r.name, r.name_t]),
-    error: firstV(err) ? JSON.parse(firstV(err)) : null,
-    cronAt: Number(firstV(cronAt)) || 0, lastUpload: Number(firstV(u)) || 0, now: now()
-  };
+  return rawJson(`{"rows":${firstV(rows) || '[]'},"error":${firstV(err) || 'null'},"cronAt":${Number(firstV(cronAt)) || 0},` +
+    `"lastUpload":${Number(firstV(u)) || 0},"now":${now()}}`);
 }
 
 async function checkNow(req, env, me, url) {
@@ -241,36 +249,30 @@ async function upload(req, env, me) {
   return json({ ok: true, received: buys.length, inserted });
 }
 // This user's top 100 sellers (purchases, then items). A seller in anyone's top 100 is checked about every 5 minutes.
+// All done inside the database, so it costs the Worker no CPU however many purchases there are.
+const STATUS_TOP_SQL = (exclude) => `UPDATE status SET top = n.top,
+      kind = CASE WHEN status.missing = 1 THEN 0 WHEN status.has_bazaar = 0 THEN 3 WHEN n.top = 1 THEN 1 ELSE 2 END
+    FROM (SELECT us.seller AS id, EXISTS (SELECT 1 FROM user_sellers x WHERE x.seller = us.seller AND x.top = 1${exclude ? ' AND x.uid <> ?1' : ''}) AS top
+          FROM user_sellers us WHERE us.uid = ?1) AS n
+    WHERE status.id = n.id AND status.top <> n.top`;
 async function retop(env, uid) {
-  const [p, cur] = await env.DB.batch([
-    env.DB.prepare('SELECT seller, items, ce, ct, ts FROM purchases WHERE uid = ?1').bind(uid),
-    env.DB.prepare('SELECT seller, top FROM user_sellers WHERE uid = ?1').bind(uid)
-  ]);
-  const ranked = aggregate(p.results, {}).sellers.sort(byRank(s => s.tot)).slice(0, MAX_SELLERS_PER_USER);
-  const top = new Set(ranked.slice(0, TOP_TIER).map(s => s.id));
-  const changed = cur.results.filter(r => (r.top === 1) !== top.has(r.seller)).map(r => [r.seller, top.has(r.seller) ? 1 : 0]);
-  if (!changed.length) return;
   await env.DB.batch([
-    env.DB.prepare(`UPDATE user_sellers SET top = json_extract(j.value, '$[1]') FROM json_each(?2) AS j
-                    WHERE user_sellers.uid = ?1 AND user_sellers.seller = json_extract(j.value, '$[0]')`).bind(uid, JSON.stringify(changed)),
-    env.DB.prepare(`UPDATE status SET top = EXISTS (SELECT 1 FROM user_sellers us WHERE us.seller = status.id AND us.top = 1),
-                      kind = CASE WHEN missing = 1 THEN 0 WHEN has_bazaar = 0 THEN 3
-                                  WHEN EXISTS (SELECT 1 FROM user_sellers us WHERE us.seller = status.id AND us.top = 1) THEN 1 ELSE 2 END
-                    WHERE id IN (SELECT json_extract(value, '$[0]') FROM json_each(?1))`).bind(JSON.stringify(changed))
+    env.DB.prepare(`WITH ranked AS (
+        SELECT p.seller AS seller FROM purchases p, json_each(p.items) j WHERE p.uid = ?1
+        GROUP BY p.seller ORDER BY COUNT(DISTINCT p.id) DESC, SUM(json_extract(j.value, '$[1]')) DESC, p.seller LIMIT ?2)
+      UPDATE user_sellers SET top = (seller IN (SELECT seller FROM ranked))
+      WHERE uid = ?1 AND top <> (seller IN (SELECT seller FROM ranked))`).bind(uid, TOP_TIER),
+    env.DB.prepare(STATUS_TOP_SQL(false)).bind(uid)
   ]);
 }
 // Deletes everything stored for this user. Their sellers stay in the shared bazaar list (public info) but drop out of the top tier.
 async function forget(env, me) {
-  const sellers = (await env.DB.prepare('SELECT seller FROM user_sellers WHERE uid = ?1 AND top = 1').bind(me.uid).all()).results.map(r => r.seller);
   await env.DB.batch([
+    env.DB.prepare(STATUS_TOP_SQL(true)).bind(me.uid),
     env.DB.prepare('DELETE FROM purchases WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM user_sellers WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM sessions WHERE uid = ?1').bind(me.uid),
-    env.DB.prepare('DELETE FROM users WHERE uid = ?1').bind(me.uid),
-    env.DB.prepare(`UPDATE status SET top = EXISTS (SELECT 1 FROM user_sellers us WHERE us.seller = status.id AND us.top = 1),
-                      kind = CASE WHEN missing = 1 THEN 0 WHEN has_bazaar = 0 THEN 3
-                                  WHEN EXISTS (SELECT 1 FROM user_sellers us WHERE us.seller = status.id AND us.top = 1) THEN 1 ELSE 2 END
-                    WHERE id IN (SELECT value FROM json_each(?1))`).bind(JSON.stringify(sellers))
+    env.DB.prepare('DELETE FROM users WHERE uid = ?1').bind(me.uid)
   ]);
   return json({ ok: true });
 }
@@ -298,8 +300,8 @@ export default {
       const me = await signedIn(req, env);
       if (!me) return json({ error: 'Please sign in' }, 401);
       if (p === '/api/me' && m === 'GET') return json(me);
-      if (p === '/api/data' && m === 'GET') return json(await getData(env, me));
-      if (p === '/api/status' && m === 'GET') return json(await getStatus(env, me, Math.max(0, Number(url.searchParams.get('since')) || 0)));
+      if (p === '/api/data' && m === 'GET') return getData(env, me);
+      if (p === '/api/status' && m === 'GET') return getStatus(env, me, Math.max(0, Number(url.searchParams.get('since')) || 0));
       if (p === '/api/check-now' && m === 'POST') return checkNow(req.clone(), env, me, url);
       if (p === '/api/purchases' && m === 'POST') return upload(req.clone(), env, me);
       if (p === '/api/logout' && m === 'POST') {

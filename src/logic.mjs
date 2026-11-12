@@ -1,6 +1,6 @@
-// Pure logic shared by the Worker (tested in test.js, no Cloudflare needed).
+// Pure logic used by the Worker (tested in test.js, no Cloudflare needed).
+// Totals per seller are worked out in the browser (public/aggregate.js), not here.
 
-export const ONE_DOLLAR = '$1 items';
 export const TOP_TIER = 100;             // top 100 sellers are checked more often
 // Check kinds: 1 = in someone's top 100 (about every 5 min), 2 = other sellers (about every 45 min),
 // 3 = had no bazaar last time (once a day, in case they open one), 0 = account not found (never).
@@ -9,54 +9,6 @@ export const kindOf = (missing, hasBazaar, top) => (missing ? 0 : hasBazaar === 
 export const MAX_TORN_PER_RUN = 36;
 export const PARALLEL = 10;
 export const MAX_NAMES_PER_RUN = 12;
-
-const itemsOf = r => (typeof r.items === 'string' ? JSON.parse(r.items) : r.items || r.it || []);
-
-// Price per item: cost_each, or cost_total split by quantity.
-export function eachPrice(r) {
-  const qty = itemsOf(r).reduce((s, i) => s + Number(i[1]), 0);
-  if (r.ce != null) return Number(r.ce);
-  if (r.ct != null && qty) return Number(r.ct) / qty;
-  return null;
-}
-
-// rows: purchases {seller|s, items|it: [[itemId, qty]], ce, ct, ts}; itemTypes: id -> [name, type]
-// Per seller: tot = [purchases, items, spent], t = { type: [purchases, items, spent] }, last = newest purchase time.
-// "$1 items" is a pseudo type for purchases at $1 or less per item; it never changes the overall totals.
-export function aggregate(rows, itemTypes) {
-  const by = new Map(), typeTotals = {};
-  for (const r of rows) {
-    const id = Number(r.seller != null ? r.seller : r.s);
-    const items = itemsOf(r), each = eachPrice(r);
-    let s = by.get(id);
-    if (!s) by.set(id, s = { id, last: 0, tot: [0, 0, 0], t: {} });
-    const ts = Number(r.ts) || 0;
-    if (ts > s.last) s.last = ts;
-    s.tot[0]++;
-    const seen = new Set();
-    let qtyAll = 0, spentAll = 0;
-    for (const [itemId, qtyRaw] of items) {
-      const qty = Number(qtyRaw), spent = each == null ? 0 : each * qty;
-      const type = (itemTypes && itemTypes[itemId] && itemTypes[itemId][1]) || 'Unknown';
-      const t = s.t[type] || (s.t[type] = [0, 0, 0]);
-      if (!seen.has(type)) { t[0]++; seen.add(type); }
-      t[1] += qty; t[2] += spent;
-      typeTotals[type] = (typeTotals[type] || 0) + qty;
-      qtyAll += qty; spentAll += spent;
-    }
-    s.tot[1] += qtyAll; s.tot[2] += spentAll;
-    if (each != null && each <= 1) {
-      const t = s.t[ONE_DOLLAR] || (s.t[ONE_DOLLAR] = [0, 0, 0]);
-      t[0]++; t[1] += qtyAll; t[2] += spentAll;
-      typeTotals[ONE_DOLLAR] = (typeTotals[ONE_DOLLAR] || 0) + qtyAll;
-    }
-  }
-  const sellers = [...by.values()].sort(byRank(s => s.tot));
-  for (const s of sellers) { s.tot[2] = Math.round(s.tot[2]); for (const k in s.t) s.t[k][2] = Math.round(s.t[k][2]); }
-  return { sellers, typeTotals };
-}
-// Rank: purchases, then items, then lower id (stable).
-export const byRank = get => (a, b) => get(b)[0] - get(a)[0] || get(b)[1] - get(a)[1] || a.id - b.id;
 
 // Torn's /user/{id}/bazaar reply -> { is_open, has_bazaar } or null when the shape is unknown.
 export function parseBazaar(j) {
