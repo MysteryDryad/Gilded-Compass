@@ -415,7 +415,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function visitedAt(id) { return visits[id] || 0; }
   function glowing(id) { const v = visitedAt(id); return v > resetAt && Date.now() - v < span * 1000; }
   const profile = id => 'https://www.torn.com/profiles.php?XID=' + id;
-  const bazaar = id => 'https://www.torn.com/bazaar.php#?userId=' + id + '#/'; // Torn needs the #/ after the id
+  const bazaar = id => 'https://www.torn.com/bazaar.php?userId=' + id + '#/'; // the id goes before the # (Torn ignores it after #); #/ on the end
 
   /* ---------- building the list ---------- */
   function compute() {
