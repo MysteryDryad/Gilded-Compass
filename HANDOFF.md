@@ -48,13 +48,18 @@ Each run logs `cron: checked N, changed N, names N, rows written N` (Worker > Ob
 
 ## Free plan daily limits (why the 500s happened)
 D1 free: 100,000 rows written and 5,000,000 rows read per day (reset 00:00 UTC). Every index adds one written row per write.
-Until 2026-11-13 the cron rewrote every checked seller (36 a minute x 3 rows = about 155,000 rows a day), so the write allowance
-ran out each day and anything writing (sign-in, uploads) failed with HTTP 500 until midnight UTC.
-Now: about 1 row a minute plus real open/close changes (measured: 36 checks, 0 changes = 1 row written). Also:
-`/api/me` uses EXISTS (1 row read, not a count), the top-100 ranking runs on the first upload, at the end of a sync (`final`)
-or at most every 6 hours, the page fetches only new purchases (`/api/data?after=`), and it polls once a minute after 10 idle minutes.
-Errors now come back as `{error}` text (a database-limit error says so) and are logged (`[observability]` in wrangler.toml).
-Schema version 2 (`meta.schemaV`): indexes `status_kind(kind)` and `status_t(t)`; the old `status_kind_t` and `status_name` are dropped.
+On 2026-11-13 the dashboard showed 126k rows written and 3.6M rows read by 17:30 UTC.
+- Writes: the old cron rewrote every checked seller (36/min x 3 rows = about 155,000 a day), so the write allowance ran out
+  each day and anything writing (sign-in, uploads) failed with HTTP 500 until midnight UTC. Now a seller is only written when
+  its answer changed (measured: 36 checks with no change = 1 row written).
+- Reads (measured with 2,800 purchases / 1,650 sellers): the top-100 ranking reads ~17,000 rows, so it runs on the first upload,
+  after the first full sync (`final: 'first'`) and then at most every 6 hours; `/api/me` uses EXISTS (1 row, was 2,800);
+  the status poll reads only changed rows (1 row when nothing changed, was 1,650) thanks to the `u` column and `status_u`
+  index; an open page fetches only new purchases (`/api/data?after=`, NOT INDEXED walk: 10 rows for 10 new, was 2,810);
+  a full page load reads ~5,600; the page polls once a minute after 10 idle minutes.
+- Errors come back as `{error}` text (a database-limit error says so) and are logged (`[observability]` in wrangler.toml).
+- Schema v3 (`meta.schemaV`, migrated by the cron and by Check now): indexes `status_kind(kind)` and `status_u(u)`; `u` =
+  when anything about a seller last changed (bazaar answer or name). Until migrated, the status poll falls back to the old query.
 
 ## Tested locally
 `wrangler dev --local --test-scheduled` with a mock Torn (`TORN_BASE` var) and two players: sign in (good, wrong and badly shaped keys), uploads, data kept apart, no-bazaar sellers hidden and moved to daily checks, check-now limits, delete my data, sign out.

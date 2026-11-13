@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.4.2
+// @version      0.4.3
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -42,7 +42,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.4.2'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.4.3'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -261,14 +261,15 @@
     save();
     return { added, sellers: [...sellers], newest, from };
   }
-  // final = the end of a sync: the site then re-ranks your top sellers (it skips that for in-between chunks to save work).
+  // final = 'first' at the end of your very first full sync: the site then ranks your top sellers once
+  // (otherwise it does that at most every 6 hours, to save its daily database allowance).
   async function sendToSite(final) {
     const ids = Object.keys(state.pending);
-    if (!ids.length && final !== true) return;
+    if (!ids.length && final !== 'first') return;
     for (let i = 0; i < Math.max(ids.length, 1); i += CHUNK) {
       const chunk = ids.slice(i, i + CHUNK);
       const body = { buys: chunk.map(id => state.pending[id]) };
-      if (final === true && i + CHUNK >= ids.length) body.final = true;
+      if (final === 'first' && i + CHUNK >= ids.length) body.final = 'first';
       let r = await siteCall('POST', '/api/purchases', body, await token());
       if (r.status === 401) { sset('token', ''); r = await siteCall('POST', '/api/purchases', body, await signIn()); }
       if (r.status !== 200) {
@@ -306,6 +307,7 @@
       // Self-repair: if the site holds none of your purchases (for example after "Delete my data"), read the log again.
       if (state.lastSync && !state.resume && !Object.keys(state.pending).length && site && site.purchases === 0) { state.lastSync = 0; state.oldest = null; save(); }
       let added = 0, sellers = [];
+      const firstSync = !state.lastSync;
       const take = x => { added += x.added; sellers = sellers.concat(x.sellers); };
       if (state.resume && state.resume.kind === 'older') { const x = await readRange(0, null, 'older', sendToSite); take(x); state.oldest = x.from; }
       if (!state.lastSync) { // first read: back to the start of your history range
@@ -320,7 +322,7 @@
           state.oldest = start;
         }
       }
-      if (Object.keys(state.pending).length || added) await sendToSite(true);
+      if (Object.keys(state.pending).length || (firstSync && added)) await sendToSite(firstSync && added ? 'first' : false);
       state.lastError = null; state.syncedAt = Date.now(); save(); shareSync(); setStatus('');
       setBtn('ok', added ? `Sent ${added} new purchase${added === 1 ? '' : 's'}` : 'Up to date');
       return { added, sellers: [...new Set(sellers)] };

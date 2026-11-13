@@ -17,10 +17,11 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS purchases (uid INTEGER NOT NULL, id TEXT NOT NULL, ts INTEGER NOT NULL, seller INTEGER NOT NULL, items TEXT NOT NULL, ce REAL, ct REAL, PRIMARY KEY (uid, id))',
   'CREATE TABLE IF NOT EXISTS user_sellers (uid INTEGER NOT NULL, seller INTEGER NOT NULL, top INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller))',
   'CREATE INDEX IF NOT EXISTS user_sellers_seller ON user_sellers(seller, top)',
-  'CREATE TABLE IF NOT EXISTS status (id INTEGER PRIMARY KEY, is_open INTEGER, has_bazaar INTEGER, missing INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL DEFAULT 0, top INTEGER NOT NULL DEFAULT 0, kind INTEGER NOT NULL DEFAULT 2, name TEXT, name_t INTEGER NOT NULL DEFAULT 0)',
+  'CREATE TABLE IF NOT EXISTS status (id INTEGER PRIMARY KEY, is_open INTEGER, has_bazaar INTEGER, missing INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL DEFAULT 0, top INTEGER NOT NULL DEFAULT 0, kind INTEGER NOT NULL DEFAULT 2, name TEXT, name_t INTEGER NOT NULL DEFAULT 0, u INTEGER NOT NULL DEFAULT 0)',
   'CREATE INDEX IF NOT EXISTS status_kind ON status(kind)',
-  'CREATE INDEX IF NOT EXISTS status_t ON status(t)',
-  'CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)'
+  'CREATE INDEX IF NOT EXISTS status_u ON status(u)',
+  'CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)',
+  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '3')"
 ];
 const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owner jailed, inactive, too low, paused
 const SESSION_DAYS = 180;
@@ -43,14 +44,24 @@ async function withSchema(env, fn) {
     return fn();
   }
 }
-// Changes for databases made before 2026-11-13: fewer indexes (each one adds a written row to every write).
-const SCHEMA_VERSION = 2;
-const MIGRATIONS = ['CREATE INDEX IF NOT EXISTS status_kind ON status(kind)', 'DROP INDEX IF EXISTS status_kind_t', 'DROP INDEX IF EXISTS status_name'];
+// Changes for databases made earlier. v2: fewer indexes (each one adds a written row to every write).
+// v3: one `u` column (when anything about a seller last changed) with an index, so the status poll reads only changed rows.
+const SCHEMA_VERSION = 3;
+const MIGRATIONS = {
+  2: ['CREATE INDEX IF NOT EXISTS status_kind ON status(kind)', 'DROP INDEX IF EXISTS status_kind_t', 'DROP INDEX IF EXISTS status_name'],
+  3: ['ALTER TABLE status ADD COLUMN u INTEGER NOT NULL DEFAULT 0', 'UPDATE status SET u = MAX(t, name_t) WHERE u = 0 AND (t > 0 OR name_t > 0)',
+      'CREATE INDEX IF NOT EXISTS status_u ON status(u)', 'DROP INDEX IF EXISTS status_t']
+};
 let migrated = false;
 async function migrate(env) {
   if (migrated) return;
-  if ((Number(firstV(await metaGet(env, 'schemaV').run())) || 0) < SCHEMA_VERSION) {
-    await env.DB.batch(MIGRATIONS.map(q => env.DB.prepare(q)).concat(metaSet(env, 'schemaV', SCHEMA_VERSION)));
+  const v = Number(firstV(await metaGet(env, 'schemaV').run())) || 1;
+  for (let n = v + 1; n <= SCHEMA_VERSION; n++) {
+    for (const q of MIGRATIONS[n] || []) {
+      try { await env.DB.prepare(q).run(); }
+      catch (e) { if (!/duplicate column/i.test(String(e && e.message))) throw e; } // already there
+    }
+    await metaSet(env, 'schemaV', n).run();
   }
   migrated = true;
 }
@@ -108,11 +119,11 @@ function saveStatements(env, out, old) {
   out.changed = old ? out.bazaar.filter(r => statusChanged(old.get(r[0]), r[1], r[2], r[3])) : out.bazaar;
   if (out.changed.length) st.push(env.DB.prepare(
     `UPDATE status SET is_open = json_extract(j.value, '$[1]'), has_bazaar = json_extract(j.value, '$[2]'),
-       missing = MAX(missing, json_extract(j.value, '$[3]')), t = json_extract(j.value, '$[4]'),
+       missing = MAX(missing, json_extract(j.value, '$[3]')), t = json_extract(j.value, '$[4]'), u = json_extract(j.value, '$[4]'),
        kind = CASE WHEN MAX(missing, json_extract(j.value, '$[3]')) = 1 THEN 0 WHEN json_extract(j.value, '$[2]') = 0 THEN 3 WHEN top = 1 THEN 1 ELSE 2 END
      FROM json_each(?1) AS j WHERE status.id = json_extract(j.value, '$[0]')`).bind(JSON.stringify(out.changed)));
   if (out.names.length) st.push(env.DB.prepare(
-    `UPDATE status SET name = json_extract(j.value, '$[1]'), missing = MAX(missing, json_extract(j.value, '$[2]')), name_t = json_extract(j.value, '$[3]'),
+    `UPDATE status SET name = json_extract(j.value, '$[1]'), missing = MAX(missing, json_extract(j.value, '$[2]')), name_t = json_extract(j.value, '$[3]'), u = MAX(u, json_extract(j.value, '$[3]')),
        kind = CASE WHEN MAX(missing, json_extract(j.value, '$[2]')) = 1 THEN 0 ELSE kind END
      FROM json_each(?1) AS j WHERE status.id = json_extract(j.value, '$[0]')`).bind(JSON.stringify(out.names)));
   if (out.fatal) st.push(metaSet(env, 'error', JSON.stringify({ msg: out.fatal, t: now() })));
@@ -232,7 +243,7 @@ async function getData(env, me, after) {
   let last = after;
   for (;;) {
     const r = await env.DB.prepare(`SELECT json_group_array(json_array(ts, seller, json(items), ce, ct)) AS j, MAX(r) AS last, COUNT(*) AS n FROM
-        (SELECT rowid AS r, ts, seller, items, ce, ct FROM purchases WHERE uid = ?1 AND rowid > ?2 ORDER BY rowid LIMIT ?3)`)
+        (SELECT rowid AS r, ts, seller, items, ce, ct FROM purchases ${after ? 'NOT INDEXED' : ''} WHERE uid = ?1 AND rowid > ?2 ORDER BY rowid LIMIT ?3)`)
       .bind(me.uid, after, CHUNK_ROWS).first();
     if (r && r.n) { parts.push(inner(r.j)); last = r.last; }
     if (!r || r.n < CHUNK_ROWS) break;
@@ -243,15 +254,19 @@ async function getData(env, me, after) {
   return rawJson(`{"me":${JSON.stringify(me)},"purchases":[${parts.filter(Boolean).join(',')}],"items":${firstV(items) || '{}'},` +
     `"settings":${JSON.stringify(settings)},"last":${Number(last) || 0},"lastUpload":${Number(firstV(u)) || 0},"now":${now()}}`);
 }
-// Only this user's sellers, only rows changed since `since`.
+// Only this user's sellers, only rows changed since `since` (index on u). Until the database has been upgraded to
+// schema v3 (the first cron run after a deploy does it), falls back to the older, costlier query.
 async function getStatus(env, me, since) {
-  const [rows, err, rr, u] = await env.DB.batch([
-    env.DB.prepare(`SELECT json_group_array(json_array(id, is_open, has_bazaar, missing, t, name, name_t)) AS v FROM status s
-                    WHERE ((s.t >= ?2 AND s.t > 0) OR (s.name_t >= ?2 AND s.name_t > 0))
-                      AND EXISTS (SELECT 1 FROM user_sellers us WHERE us.uid = ?1 AND us.seller = s.id)`).bind(me.uid, since),
-    metaGet(env, 'error'), metaGet(env, 'rr'),
-    env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid)
-  ]);
+  const rowsQ = cond => env.DB.prepare(`SELECT json_group_array(json_array(id, is_open, has_bazaar, missing, t, name, name_t)) AS v FROM status s
+                    WHERE ${cond} AND EXISTS (SELECT 1 FROM user_sellers us WHERE us.uid = ?1 AND us.seller = s.id)`).bind(me.uid, since);
+  const others = [metaGet(env, 'error'), metaGet(env, 'rr'), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid)];
+  let res;
+  try { res = await env.DB.batch([rowsQ('s.u >= ?2 AND s.u > 0'), ...others]); }
+  catch (e) {
+    if (!/no such column/i.test(String(e && e.message))) throw e;
+    res = await env.DB.batch([rowsQ('((s.t >= ?2 AND s.t > 0) OR (s.name_t >= ?2 AND s.name_t > 0))'), ...others]);
+  }
+  const [rows, err, rr, u] = res;
   let cronAt = 0; try { cronAt = Number(JSON.parse(firstV(rr) || '{}').at) || 0; } catch (e) { /* none yet */ }
   return rawJson(`{"rows":${firstV(rows) || '[]'},"error":${firstV(err) || 'null'},"cronAt":${cronAt},` +
     `"lastUpload":${Number(firstV(u)) || 0},"now":${now()}}`);
@@ -264,6 +279,7 @@ async function checkNow(req, env, me, url) {
   let ids = validIds(body && body.ids);
   if (!ids) return json({ error: 'ids must be 1 to 30 player ids (digits only)' }, 400);
   if (!env.TORN_API_KEY) return json({ checked: 0, partial: true, error: 'The site owner has not set TORN_API_KEY yet' });
+  await migrate(env); // results are saved in the v3 layout
   const t = now(), win = Math.floor(t / CHECK_WINDOW);
   const [mine, cool, used] = await env.DB.batch([
     env.DB.prepare(`SELECT s.id AS seller, s.is_open, s.has_bazaar, s.missing FROM status s
@@ -305,10 +321,11 @@ async function upload(req, env, me) {
   }
   const res = await env.DB.batch(st);
   const inserted = buys.length ? res[0].meta.changes : 0;
-  // Ranking reads every purchase you have, so it runs on your first upload, at the end of a sync, or at most every 6 hours.
-  if (inserted || (body && body.final)) {
+  // Ranking reads every purchase you have (~17,000 rows for 2,800 purchases), so it runs on your first upload, once after
+  // your first full sync (final: 'first'), and then at most every 6 hours.
+  if (inserted || (body && body.final === 'first')) {
     const last = Number(firstV(await metaGet(env, 'retop:' + me.uid).run())) || 0;
-    if (!last || body.final || now() - last > 6 * 3600) { await retop(env, me.uid); await metaSet(env, 'retop:' + me.uid, now()).run(); }
+    if (!last || body.final === 'first' || now() - last > 6 * 3600) { await retop(env, me.uid); await metaSet(env, 'retop:' + me.uid, now()).run(); }
   }
   return json({ ok: true, received: buys.length, inserted });
 }
