@@ -48,18 +48,23 @@ Each run logs `cron: checked N, changed N, names N, rows written N` (Worker > Ob
 
 ## Free plan daily limits (why the 500s happened)
 D1 free: 100,000 rows written and 5,000,000 rows read per day (reset 00:00 UTC). Every index adds one written row per write.
-On 2026-11-13 the dashboard showed 126k rows written and 3.6M rows read by 17:30 UTC.
-- Writes: the old cron rewrote every checked seller (36/min x 3 rows = about 155,000 a day), so the write allowance ran out
-  each day and anything writing (sign-in, uploads) failed with HTTP 500 until midnight UTC. Now a seller is only written when
-  its answer changed (measured: 36 checks with no change = 1 row written).
-- Reads (measured with 2,800 purchases / 1,650 sellers): the top-100 ranking reads ~17,000 rows, so it runs on the first upload,
-  after the first full sync (`final: 'first'`) and then at most every 6 hours; `/api/me` uses EXISTS (1 row, was 2,800);
-  the status poll reads only changed rows (1 row when nothing changed, was 1,650) thanks to the `u` column and `status_u`
-  index; an open page fetches only new purchases (`/api/data?after=`, NOT INDEXED walk: 10 rows for 10 new, was 2,810);
-  a full page load reads ~5,600; the page polls once a minute after 10 idle minutes.
+History: on 2026-11-13 the old cron (rewriting every checked seller) used ~155,000 writes a day, and then a newcomer with 26,174
+purchases needed ~100,000 writes for their first sync; both made sign-ins and uploads fail with HTTP 500 until midnight UTC.
+Schema v4 (migrated automatically, all or nothing) keeps the free plan workable for many players:
+- **Purchases in bundles** (`pbatches`: one row per upload of up to 1,000-2,000). Measured: that newcomer's first sync is
+  ~12,100 rows written (almost all of it the ~3 rows per brand-new seller in `status`), was ~100,000. A re-sent purchase is
+  stored again but counted once by the page (same log id).
+- **Seller list per player as one row** (`usets`, merged in SQL on each upload). Privacy filter for polls and Check now.
+- **Top 100 worked out by the page** (`POST /api/tops`, only the differences are written; `tops` table). No server ranking.
+- **Cron**: round robin, a seller's row written only when its answer changed, a name found with the first check goes in the
+  same row write; safety brake: above 60,000 cron writes in a day it checks 10 sellers a run and skips names.
+- **New players start at 90 days** of history (existing players keep their setting).
+- **Per player per day**: 500 uploads, 60,000 purchases, 8,000 new sellers, 40 top-100 updates (HTTP 429 with a message; the
+  userscript keeps the rest and sends it after midnight UTC).
+- Reads measured (player with 4,000 sellers / 26,174 purchases): status poll 4 rows (changed rows via `status_u`, then the
+  player's own kept in the Worker; doing it the other way read 12,000), first poll ~8,000, full data ~60 (bundles), only-new data
+  a few rows; `/api/me` 1 row.
 - Errors come back as `{error}` text (a database-limit error says so) and are logged (`[observability]` in wrangler.toml).
-- Schema v3 (`meta.schemaV`, migrated by the cron and by Check now): indexes `status_kind(kind)` and `status_u(u)`; `u` =
-  when anything about a seller last changed (bazaar answer or name). Until migrated, the status poll falls back to the old query.
 
 ## Tested locally
 `wrangler dev --local --test-scheduled` with a mock Torn (`TORN_BASE` var) and two players: sign in (good, wrong and badly shaped keys), uploads, data kept apart, no-bazaar sellers hidden and moved to daily checks, check-now limits, delete my data, sign out.
