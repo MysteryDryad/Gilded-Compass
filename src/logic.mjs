@@ -1,44 +1,14 @@
 // Pure logic used by the Worker (tested in test.js, no Cloudflare needed).
-// Totals per seller are worked out in the browser (public/aggregate.js), not here.
+// Totals per seller are worked out in the browser (public/aggregate.js), and bazaar checks are done by the players'
+// userscripts with their own keys (gilded-compass.user.js), so neither is here.
 
-export const TOP_TIER = 100;             // top 100 sellers are checked more often
-// Check kinds: 1 = in someone's top 100, 2 = other sellers, 3 = had no bazaar last time (re-checked slowly, in case they
-// open one), 0 = account not found (never). Each run checks a few of each kind in turn (PER_RUN in worker.js).
-export const kindOf = (missing, hasBazaar, top) => (missing ? 0 : hasBazaar === 0 ? 3 : top ? 1 : 2);
-export const MAX_TORN_PER_RUN = 36;
-export const PARALLEL = 10;
-export const MAX_NAMES_PER_RUN = 12;
-
-// Torn's /user/{id}/bazaar reply -> { is_open, has_bazaar } or null when the shape is unknown.
-export function parseBazaar(j) {
-  if (!j || typeof j !== 'object') return null;
-  const pick = (o, ks) => { for (const k of ks) if (o && o[k] !== undefined && o[k] !== null) return o[k]; return undefined; };
-  let open = pick(j, ['bazaar_is_open', 'is_open']), exists = pick(j, ['bazaar_exists', 'exists']);
-  if (open === undefined && j.bazaar && typeof j.bazaar === 'object' && !Array.isArray(j.bazaar)) {
-    open = pick(j.bazaar, ['bazaar_is_open', 'is_open']); exists = pick(j.bazaar, ['bazaar_exists', 'exists']);
-  }
-  if (open === undefined) return null;
-  return { is_open: open ? 1 : 0, has_bazaar: exists === undefined ? (open ? 1 : 0) : (exists ? 1 : 0) };
-}
-export function parseName(j) {
-  const p = (j && (j.profile || j)) || {};
-  return typeof p.name === 'string' && p.name ? p.name : null;
-}
-
-// Round robin: the next rows after where the last run stopped (`after`), topped up from the start of the list
-// (`fromStart`) when the end is reached. Each seller is checked in turn without storing a time per seller.
-export function roundRobin(after, fromStart, n) {
-  const out = after.slice(0, n), seen = new Set(out.map(r => r.id));
-  for (const r of fromStart) { if (out.length >= n) break; if (!seen.has(r.id)) { out.push(r); seen.add(r.id); } }
-  return out;
-}
-// Did a bazaar check find something new? Only then is the seller's row written (database writes are the scarce thing).
+// Did a bazaar check (sent by a userscript) find something new? Only then is the seller's row written (database writes are the scarce thing).
 export function statusChanged(old, is_open, has_bazaar, missing) {
   if (!old) return true;
   return old.is_open !== is_open || old.has_bazaar !== has_bazaar || (old.missing || 0) !== missing;
 }
 
-// Check now: only digit ids, at most 30, no repeats.
+// Lists of player ids: only digits, at most `max`, no repeats.
 export function validIds(ids, max = 30) {
   if (!Array.isArray(ids) || !ids.length || ids.length > max) return null;
   const out = [];
@@ -48,6 +18,15 @@ export function validIds(ids, max = 30) {
     if (!out.includes(Number(s))) out.push(Number(s));
   }
   return out;
+}
+
+// A bazaar check result sent by a userscript: [id, is_open, has_bazaar, missing] (0 or 1) -> clean copy or null.
+export function validResult(r) {
+  if (!Array.isArray(r) || !/^\d{1,10}$/.test(String(r[0])) || !(Number(r[0]) > 0)) return null;
+  const b = v => (v === 0 || v === 1 || v === true || v === false ? Number(v) : null);
+  const o = b(r[1]), h = b(r[2]), m = b(r[3] || 0);
+  if (o === null || h === null || m === null) return null;
+  return [Number(r[0]), o, h, m];
 }
 
 // Purchases sent by the userscript.

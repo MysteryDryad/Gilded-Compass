@@ -53,17 +53,12 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
     console.log('     (added up 23,094 purchases in ' + ms + ' ms)');
   }
 
-  eq('bazaar open', L.parseBazaar({ bazaar_is_open: true, bazaar_exists: true, bazaar: [] }), { is_open: 1, has_bazaar: 1 });
-  eq('bazaar closed', L.parseBazaar({ bazaar_is_open: false, bazaar_exists: true }), { is_open: 0, has_bazaar: 1 });
-  eq('no bazaar', L.parseBazaar({ bazaar_is_open: false, bazaar_exists: false }), { is_open: 0, has_bazaar: 0 });
-  eq('unknown shape -> null', L.parseBazaar({ bazaar: [] }), null);
-  eq('name from profile', L.parseName({ profile: { id: 1, name: 'Duke' } }), 'Duke');
+  eq('bazaar open', U.wired.parseBazaar({ bazaar_is_open: true, bazaar_exists: true, bazaar: [] }), { is_open: 1, has_bazaar: 1 });
+  eq('bazaar closed', U.wired.parseBazaar({ bazaar_is_open: false, bazaar_exists: true }), { is_open: 0, has_bazaar: 1 });
+  eq('no bazaar', U.wired.parseBazaar({ bazaar_is_open: false, bazaar_exists: false }), { is_open: 0, has_bazaar: 0 });
+  eq('unknown shape -> null', U.wired.parseBazaar({ bazaar: [] }), null);
+  eq('name from profile', U.wired.parseName({ profile: { id: 1, name: 'Duke' } }), 'Duke');
 
-  // round robin: carry on after the last one, then wrap to the start
-  const R = ids => ids.map(id => ({ id }));
-  eq('round robin carries on', L.roundRobin(R([5, 6, 7]), R([1, 2, 3]), 3).map(r => r.id), [5, 6, 7]);
-  eq('round robin wraps to the start', L.roundRobin(R([7]), R([1, 2, 7]), 3).map(r => r.id), [7, 1, 2]);
-  eq('round robin never repeats in one run', L.roundRobin(R([]), R([1, 2]), 5).map(r => r.id), [1, 2]);
   // only changed sellers are written
   eq('first check is a change', L.statusChanged({ is_open: null, has_bazaar: null, missing: 0 }, 1, 1, 0), true);
   eq('same answer is not a change', L.statusChanged({ is_open: 1, has_bazaar: 1, missing: 0 }, 1, 1, 0), false);
@@ -83,7 +78,9 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
   eq('bearer header', L.bearer('Bearer ' + 'a'.repeat(43)), 'a'.repeat(43));
   eq('bearer garbage', L.bearer('Basic abc'), null);
   eq('key shape', [L.looksLikeKey('AbCdEfGh12345678'), L.looksLikeKey('short'), L.looksLikeKey('AbCdEfGh1234567!')], [true, false, false]);
-  eq('check kinds: top, other, no bazaar, gone', [L.kindOf(0, 1, 1), L.kindOf(0, null, 0), L.kindOf(0, 0, 1), L.kindOf(1, 1, 1)], [1, 2, 3, 0]);
+  eq('check result ok', L.validResult(['123', true, 1, 0]), [123, 1, 1, 0]);
+  eq('check result: missing defaults to 0', L.validResult([5, 0, 0]), [5, 0, 0, 0]);
+  eq('check result rejects bad id / flags', [L.validResult(['1; DROP', 1, 1, 0]), L.validResult([0, 1, 1, 0]), L.validResult([7, 'yes', 1, 0]), L.validResult([7, 2, 1, 0]), L.validResult('7')], [null, null, null, null, null]);
 
   console.log(fail ? `\n${fail} FAILED` : '\nAll passed');
   process.exit(fail ? 1 : 0);

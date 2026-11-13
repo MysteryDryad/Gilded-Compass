@@ -2,14 +2,12 @@
 // - Anyone signs in with their own Torn API key: the key is used once to ask Torn who they are, then forgotten.
 //   They get a random sign-in token; only its hash is stored.
 // - Each user's bazaar purchases (sent by the userscript) are stored under their player id and only shown to them.
-// - A cron job keeps bazaar Open/Closed flags and usernames fresh with the site's own Public key (TORN_API_KEY).
+// - Bazaar Open/Closed flags and seller names are checked by each player's own 🧭 userscript with their own key
+//   (public Torn info) and sent here; the site never calls Torn for them. The site only works with the userscript.
 // - Free plan budget (per day, reset 00:00 UTC): 100,000 rows written, 5,000,000 rows read. Writes are the scarce part:
 //   purchases are stored in bundles (one row per upload), each player's seller list is one row, a seller's status row is
 //   only written when something about them changed, and every index costs an extra row per write.
-import {
-  parseBazaar, parseName, roundRobin, statusChanged, validIds, validBuy, newToken, sha256hex, bearer, looksLikeKey,
-  MAX_TORN_PER_RUN, PARALLEL, MAX_NAMES_PER_RUN
-} from './logic.mjs';
+import { statusChanged, validIds, validBuy, validResult, newToken, sha256hex, bearer, looksLikeKey } from './logic.mjs';
 
 const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS users (uid INTEGER PRIMARY KEY, name TEXT, created INTEGER NOT NULL, last_upload INTEGER NOT NULL DEFAULT 0)',
@@ -20,22 +18,18 @@ const SCHEMA = [
   'CREATE INDEX IF NOT EXISTS pbatches_uid ON pbatches(uid)',
   // one row per player: JSON list of the sellers they bought from
   'CREATE TABLE IF NOT EXISTS usets (uid INTEGER PRIMARY KEY, sellers TEXT NOT NULL)',
-  // each player's top 100 sellers (worked out by their page); a seller in anyone's top 100 is checked more often
+  // each player's top 100 sellers (worked out by their page); their userscript checks these more often
   'CREATE TABLE IF NOT EXISTS tops (uid INTEGER NOT NULL, seller INTEGER NOT NULL, PRIMARY KEY (uid, seller)) WITHOUT ROWID',
-  'CREATE INDEX IF NOT EXISTS tops_seller ON tops(seller)',
   'CREATE TABLE IF NOT EXISTS status (id INTEGER PRIMARY KEY, is_open INTEGER, has_bazaar INTEGER, missing INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL DEFAULT 0, top INTEGER NOT NULL DEFAULT 0, kind INTEGER NOT NULL DEFAULT 2, name TEXT, name_t INTEGER NOT NULL DEFAULT 0, u INTEGER NOT NULL DEFAULT 0)',
-  'CREATE INDEX IF NOT EXISTS status_kind ON status(kind)',
   'CREATE INDEX IF NOT EXISTS status_u ON status(u)',
   'CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)',
-  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '4')"
+  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '5')"
 ];
 const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owner jailed, inactive, too low, paused
 const SESSION_DAYS = 180;
-const USER_COOLDOWN = 30;      // seconds between one user's Check now presses
-const CHECK_WINDOW = 30;       // all users together: at most 30 Check now lookups per 30 s (cron adds 36/min: under Torn's 100/min)
 const TOP_TIER = 100;
 // One player per day (generous for a real first sync; stops one person draining the shared allowance).
-const DAY_CAP = { purchases: 60000, sellers: 8000, uploads: 500, tops: 40 };
+const DAY_CAP = { purchases: 60000, sellers: 8000, uploads: 500, tops: 40, changes: 5000, items: 3 };
 const NEW_USER_LOOKBACK = 90;  // days of history a new player starts with (they can widen it in Settings)
 const now = () => Math.floor(Date.now() / 1000);
 const HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
@@ -56,7 +50,8 @@ async function withSchema(env, fn) {
 // Changes for databases made earlier. v2: fewer indexes (each one adds a written row to every write).
 // v3: one `u` column (when anything about a seller last changed) with an index, so the status poll reads only changed rows.
 // v4: purchases in bundles, seller lists as one row per player, top 100 in its own small table (old tables copied, then dropped).
-const SCHEMA_VERSION = 4;
+// v5: bazaar checks moved to the players' userscripts; the old cron's indexes (each an extra written row per change) go.
+const SCHEMA_VERSION = 5;
 const MIGRATIONS = {
   2: ['CREATE INDEX IF NOT EXISTS status_kind ON status(kind)', 'DROP INDEX IF EXISTS status_kind_t', 'DROP INDEX IF EXISTS status_name'],
   3: ['ALTER TABLE status ADD COLUMN u INTEGER NOT NULL DEFAULT 0', 'UPDATE status SET u = MAX(t, name_t) WHERE u = 0 AND (t > 0 OR name_t > 0)',
@@ -69,7 +64,8 @@ const MIGRATIONS = {
       'INSERT INTO pbatches (uid, n, data) SELECT uid, COUNT(*), json_group_array(json_array(ts, seller, json(items), ce, ct, id)) FROM purchases GROUP BY uid, rowid / 1000',
       'INSERT OR IGNORE INTO usets (uid, sellers) SELECT uid, json_group_array(seller) FROM user_sellers GROUP BY uid',
       'INSERT OR IGNORE INTO tops (uid, seller) SELECT uid, seller FROM user_sellers WHERE top = 1',
-      'DROP TABLE IF EXISTS purchases', 'DROP TABLE IF EXISTS user_sellers']
+      'DROP TABLE IF EXISTS purchases', 'DROP TABLE IF EXISTS user_sellers'],
+  5: ['DROP INDEX IF EXISTS status_kind', 'DROP INDEX IF EXISTS tops_seller', "DELETE FROM meta WHERE k IN ('error', 'rr', 'itemsAt') OR k LIKE 'win:%' OR k LIKE 'cool:%' OR k LIKE 'retop:%'"]
 };
 let migrated = false;
 async function migrate(env) {
@@ -92,13 +88,12 @@ const metaSet = (env, k, v) => env.DB.prepare('INSERT INTO meta (k, v) VALUES (?
 const metaGet = (env, k) => env.DB.prepare('SELECT v FROM meta WHERE k = ?1').bind(k);
 const firstV = r => (r && r.results && r.results[0] ? r.results[0].v : null);
 const isJson = req => /^application\/json\b/i.test(req.headers.get('Content-Type') || '');
-const KIND_SQL = top => `CASE WHEN missing = 1 THEN 0 WHEN has_bazaar = 0 THEN 3 WHEN ${top} THEN 1 ELSE 2 END`;
 
-/* ---------- Torn ---------- */
+/* ---------- Torn (only at sign-in, with the player's own key) ---------- */
 async function torn(env, path, key) {
   const base = env.TORN_BASE || 'https://api.torn.com/v2';
   let r;
-  try { r = await fetch(`${base}${path}${path.includes('?') ? '&' : '?'}key=${encodeURIComponent(key || env.TORN_API_KEY || '')}`, { headers: { 'User-Agent': 'GildedCompass' } }); }
+  try { r = await fetch(`${base}${path}${path.includes('?') ? '&' : '?'}key=${encodeURIComponent(key || '')}`, { headers: { 'User-Agent': 'GildedCompass' } }); }
   catch (e) { return { retry: true }; }
   if (r.status === 429) return { rate: true };
   if (r.status >= 500) return { retry: true };
@@ -113,29 +108,6 @@ async function torn(env, path, key) {
   return { data: j };
 }
 
-// Bazaar or name lookups, 10 at a time. Stops early on "too many requests" or a bad key.
-async function runJobs(env, jobs) {
-  const bazaar = [], names = [];
-  let rate = false, fatal = null, done = 0;
-  for (let i = 0; i < jobs.length && !rate && !fatal; i += PARALLEL) {
-    const wave = jobs.slice(i, i + PARALLEL);
-    const res = await Promise.all(wave.map(j => torn(env, j.kind === 'name' ? `/user/${j.id}/basic` : `/user/${j.id}/bazaar`)));
-    const t = now();
-    res.forEach((r, k) => {
-      const j = wave[k];
-      if (r.rate) { rate = true; return; }
-      if (r.fatal) { fatal = r.fatal; return; }
-      if (r.retry) return;
-      done++;
-      if (j.kind === 'name') names.push([j.id, r.missing ? '(not found)' : (parseName(r.data) || '(unknown)'), r.missing ? 1 : 0, t]);
-      else {
-        const b = r.missing ? { is_open: 0, has_bazaar: 0 } : parseBazaar(r.data);
-        if (b) bazaar.push([j.id, b.is_open, b.has_bazaar, r.missing ? 1 : 0, t]);
-      }
-    });
-  }
-  return { bazaar, names, rate, fatal, done };
-}
 // Saves results, one UPDATE row per seller (a name found together with the first check goes in the same row write).
 // `old` (id -> row as it was): bazaar answers are only written when they changed; t = when the last change was seen.
 function saveStatements(env, out, old) {
@@ -154,76 +126,16 @@ function saveStatements(env, out, old) {
        t = COALESCE(json_extract(j.value, '$[4]'), t),
        name = COALESCE(json_extract(j.value, '$[5]'), name),
        name_t = COALESCE(json_extract(j.value, '$[7]'), name_t),
-       u = MAX(u, COALESCE(json_extract(j.value, '$[4]'), 0), COALESCE(json_extract(j.value, '$[7]'), 0)),
-       kind = CASE WHEN MAX(missing, COALESCE(json_extract(j.value, '$[3]'), 0), COALESCE(json_extract(j.value, '$[6]'), 0)) = 1 THEN 0
-                   WHEN COALESCE(json_extract(j.value, '$[2]'), has_bazaar) = 0 THEN 3 WHEN top = 1 THEN 1 ELSE 2 END
+       u = MAX(u, COALESCE(json_extract(j.value, '$[4]'), 0), COALESCE(json_extract(j.value, '$[7]'), 0))
      FROM json_each(?1) AS j WHERE status.id = json_extract(j.value, '$[0]')`).bind(JSON.stringify(rows)));
-  if (out.fatal) st.push(metaSet(env, 'error', JSON.stringify({ msg: out.fatal, t: now() })));
-  else if (out.done) st.push(env.DB.prepare("DELETE FROM meta WHERE k = 'error'"));
   return st;
 }
 
-/* ---------- cron: every minute ---------- */
-// Each run checks the next few sellers of each kind in turn (round robin) and remembers where it stopped in one small row.
-// Subrequests (free plan allows 50): 2 D1 reads + at most 36 Torn calls + 1-2 D1 writes (+ a schema check per Worker start).
-const PER_RUN = { 1: 14, 3: 2 }; // top sellers, sellers with no bazaar; the other sellers get the rest of the 36
-const BRAKE_WRITES = 60000;       // the cron's own writes today; above this it checks fewer sellers (safety brake)
-async function cron(env, scheduledTime) {
-  if (!env.TORN_API_KEY) return;
+/* ---------- cron: hourly housekeeping ---------- */
+// No Torn calls: bazaar checks come from the players' userscripts. This only upgrades the database and drops old sign-ins.
+async function cron(env) {
   await migrate(env);
-  let rr = {}; try { rr = JSON.parse(firstV(await metaGet(env, 'rr').run()) || '{}'); } catch (e) { /* start over */ }
-  const day = Math.floor(now() / 86400);
-  if (rr.d !== day) { rr.d = day; rr.w = 0; rr.lw = 0; }
-  rr.w = (rr.w || 0) + (rr.lw || 0); // the last run's writes, counted now
-  const braked = rr.w > BRAKE_WRITES;
-  const max = braked ? 10 : MAX_TORN_PER_RUN;
-  const cur = k => Number(rr['c' + k]) || 0;
-  const q = (kind, after, n) => env.DB.prepare('SELECT id, is_open, has_bazaar, missing, name_t FROM status WHERE kind = ?1 AND id > ?2 ORDER BY id LIMIT ?3').bind(kind, after, n);
-  const [a1, w1, a2, w2, a3, w3, itemsAt] = await env.DB.batch([
-    q(1, cur(1), PER_RUN[1]), q(1, 0, PER_RUN[1]), q(2, cur(2), max), q(2, 0, max), q(3, cur(3), PER_RUN[3]), q(3, 0, PER_RUN[3]),
-    metaGet(env, 'itemsAt')
-  ]);
-  const st = [];
-  let budget = max, names = 0;
-  // Torn's item list (id -> name and type), refreshed weekly with the site's own key.
-  if (now() - (Number(firstV(itemsAt)) || 0) > 7 * 86400) {
-    budget--;
-    const r = await torn(env, '/torn/items');
-    if (r.data) {
-      const list = Array.isArray(r.data.items) ? r.data.items : Object.entries(r.data.items || {}).map(([id, v]) => Object.assign({ id }, v));
-      const map = {};
-      list.forEach(i => { if (i && i.id) map[i.id] = [i.name, i.type || 'Unknown', i.sub_type || null]; });
-      if (Object.keys(map).length) st.push(metaSet(env, 'items', JSON.stringify(map)), metaSet(env, 'itemsAt', now()));
-    }
-  }
-  const jobs = [], old = new Map();
-  const take = rows => {
-    const used = [];
-    for (const r of rows) {
-      if (budget <= 0) break;
-      jobs.push({ kind: 'bazaar', id: r.id }); old.set(r.id, r); budget--; used.push(r);
-      if (!r.name_t && !braked && names < MAX_NAMES_PER_RUN && budget > 0) { jobs.push({ kind: 'name', id: r.id }); budget--; names++; } // names come along the first time round
-    }
-    return used;
-  };
-  const used = { 1: take(roundRobin(a1.results, w1.results, PER_RUN[1])), 3: take(roundRobin(a3.results, w3.results, PER_RUN[3])) };
-  used[2] = take(roundRobin(a2.results, w2.results, max));
-  const out = jobs.length ? await runJobs(env, jobs) : { bazaar: [], names: [], done: 0 };
-  const checked = new Set(out.bazaar.map(r => r[0]));
-  for (const k of [1, 2, 3]) { // carry on after the last seller actually checked
-    const last = used[k].filter(r => checked.has(r.id)).pop();
-    if (last) rr['c' + k] = last.id;
-  }
-  st.push(...saveStatements(env, out, old));
-  if (new Date(scheduledTime || Date.now()).getUTCMinutes() === 0) {
-    st.push(env.DB.prepare('DELETE FROM sessions WHERE created < ?1').bind(now() - SESSION_DAYS * 86400));
-  }
-  rr.at = now();
-  rr.lw = 1; // this run's writes, added to today's total by the next run: 1 if it only wrote this row
-  const res = await env.DB.batch(st.concat(metaSet(env, 'rr', JSON.stringify(rr))));
-  const written = res.reduce((n, r) => n + ((r.meta && r.meta.rows_written) || 0), 0);
-  if (written > 1) { rr.lw = written + 1; await metaSet(env, 'rr', JSON.stringify(rr)).run(); } // +1 for this extra row
-  console.log(`cron: checked ${out.bazaar.length}, changed ${out.changed.length}, names ${out.names.length}, rows written ${written}, today ${rr.w + rr.lw}${braked ? ' (brake on)' : ''}${out.fatal ? ', error: ' + out.fatal : ''}${out.rate ? ', Torn rate limit' : ''}`);
+  await env.DB.prepare('DELETE FROM sessions WHERE created < ?1').bind(now() - SESSION_DAYS * 86400).run();
 }
 
 /* ---------- sign in ---------- */
@@ -284,7 +196,7 @@ async function putSettings(req, env, me) {
 async function getData(env, me, after) {
   const [b, items, u, set, tp] = await env.DB.batch([
     env.DB.prepare('SELECT seq, data FROM pbatches WHERE uid = ?1 AND seq > ?2 ORDER BY seq').bind(me.uid, after),
-    metaGet(env, 'items'), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid), metaGet(env, 'set:' + me.uid),
+    env.DB.prepare("SELECT v FROM meta WHERE k IN (?1, 'items') ORDER BY k = 'items' LIMIT 1").bind('items:' + me.uid), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid), metaGet(env, 'set:' + me.uid),
     env.DB.prepare('SELECT seller FROM tops WHERE uid = ?1').bind(me.uid)
   ]);
   const parts = b.results.map(r => inner(r.data)).filter(Boolean);
@@ -299,7 +211,7 @@ async function getData(env, me, after) {
 // whole seller list on every poll: 12,000 rows for a player with 4,000 sellers).
 const POLL_MAX = 5000;
 async function getStatus(env, me, since) {
-  const others = [metaGet(env, 'error'), metaGet(env, 'rr'), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid)];
+  const others = [env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid)];
   let rowsJson, rest, until = 0;
   if (!since) {
     const [rows] = await env.DB.batch([env.DB.prepare(`SELECT json_group_array(json_array(s.id, s.is_open, s.has_bazaar, s.missing, s.t, s.name, s.name_t)) AS v
@@ -315,45 +227,16 @@ async function getStatus(env, me, since) {
     if (res[0].results.length) until = Math.max(...res[0].results.map(r => Math.max(r.t || 0, r.name_t || 0))); // carry on from here even if none were yours
     rest = res.slice(2);
   }
-  const [err, rr, u] = rest;
-  let cronAt = 0; try { cronAt = Number(JSON.parse(firstV(rr) || '{}').at) || 0; } catch (e) { /* none yet */ }
-  return rawJson(`{"rows":${rowsJson},"until":${until},"error":${firstV(err) || 'null'},"cronAt":${cronAt},` +
+  const [u] = rest;
+  return rawJson(`{"rows":${rowsJson},"until":${until},"error":null,` +
     `"lastUpload":${Number(firstV(u)) || 0},"now":${now()}}`);
-}
-
-async function checkNow(req, env, me, url) {
-  if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
-  if (req.headers.get('Origin') !== url.origin) return json({ error: 'Wrong origin' }, 403);
-  let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
-  let ids = validIds(body && body.ids);
-  if (!ids) return json({ error: 'ids must be 1 to 30 player ids (digits only)' }, 400);
-  if (!env.TORN_API_KEY) return json({ checked: 0, partial: true, error: 'The site owner has not set TORN_API_KEY yet' });
-  const t = now(), win = Math.floor(t / CHECK_WINDOW);
-  const [mine, cool, used] = await env.DB.batch([
-    env.DB.prepare(`SELECT s.id AS seller, s.is_open, s.has_bazaar, s.missing FROM status s
-                    WHERE s.id IN (SELECT value FROM json_each(?2)) AND s.id IN ${MY_SELLERS}`).bind(me.uid, JSON.stringify(ids)),
-    metaGet(env, 'cool:' + me.uid), metaGet(env, 'win:' + win)
-  ]);
-  ids = mine.results.map(r => r.seller); // only sellers this user bought from
-  const wait = USER_COOLDOWN - (t - (Number(firstV(cool)) || 0));
-  if (wait > 0) return json({ checked: 0, partial: true, error: `Please wait ${wait}s`, wait }, 429);
-  const room = CHECK_WINDOW - (Number(firstV(used)) || 0);
-  if (room <= 0) { const w = CHECK_WINDOW - (t % CHECK_WINDOW); return json({ checked: 0, partial: true, error: `Busy, try again in ${w}s`, wait: w }, 429); }
-  ids = ids.slice(0, room);
-  await env.DB.batch([metaSet(env, 'cool:' + me.uid, t), metaSet(env, 'win:' + win, (Number(firstV(used)) || 0) + ids.length),
-    env.DB.prepare("DELETE FROM meta WHERE k LIKE 'win:%' AND k <> ?1").bind('win:' + win)]);
-  const old = new Map(mine.results.map(r => [r.seller, r]));
-  const out = await runJobs(env, ids.map(id => ({ kind: 'bazaar', id })));
-  const st = saveStatements(env, out, old);
-  if (st.length) await env.DB.batch(st);
-  return json({ checked: out.bazaar.length, partial: out.bazaar.length < ids.length, error: out.fatal || (out.rate ? 'Torn says too many requests, try again in a minute' : null) });
 }
 
 // Daily counters for one player (uploads, purchases, new sellers, top-100 updates).
 async function dayCounter(env, uid) {
   let q = {}; try { q = JSON.parse(firstV(await metaGet(env, 'day:' + uid).run()) || '{}'); } catch (e) { /* start over */ }
   const d = Math.floor(now() / 86400);
-  return q.d === d ? q : { d, uploads: 0, purchases: 0, sellers: 0, tops: 0 };
+  return q.d === d ? q : { d, uploads: 0, purchases: 0, sellers: 0, tops: 0, changes: 0, items: 0 };
 }
 const capMsg = what => `Daily limit for one player reached (${what}). The rest is sent automatically after midnight UTC.`;
 
@@ -383,7 +266,7 @@ async function upload(req, env, me) {
   return json({ ok: true, received: buys.length, inserted: buys.length });
 }
 // Your page works out your top 100 sellers and sends it here; only the differences are written.
-// A seller in anyone's top 100 is checked more often (kind 1).
+// Your 🧭 userscript checks these bazaars more often.
 async function putTops(req, env, me) {
   if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
   let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
@@ -402,9 +285,6 @@ async function putTops(req, env, me) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM tops WHERE uid = ?1 AND seller IN (SELECT value FROM json_each(?2))').bind(me.uid, JSON.stringify(del)),
     env.DB.prepare('INSERT OR IGNORE INTO tops (uid, seller) SELECT ?1, value FROM json_each(?2)').bind(me.uid, JSON.stringify(add)),
-    env.DB.prepare(`UPDATE status SET top = EXISTS (SELECT 1 FROM tops x WHERE x.seller = status.id),
-                      kind = ${KIND_SQL('EXISTS (SELECT 1 FROM tops x WHERE x.seller = status.id)')}
-                    WHERE id IN (SELECT value FROM json_each(?1)) AND top <> EXISTS (SELECT 1 FROM tops x WHERE x.seller = status.id)`).bind(JSON.stringify(add.concat(del))),
     metaSet(env, 'day:' + me.uid, JSON.stringify(q))
   ]);
   return json({ ok: true, changed: add.length + del.length });
@@ -412,43 +292,78 @@ async function putTops(req, env, me) {
 // Deletes everything stored for this user. Their sellers stay in the shared bazaar list (public info) but drop out of the top tier.
 async function forget(env, me) {
   await env.DB.batch([
-    env.DB.prepare(`UPDATE status SET top = EXISTS (SELECT 1 FROM tops x WHERE x.seller = status.id AND x.uid <> ?1),
-                      kind = ${KIND_SQL('EXISTS (SELECT 1 FROM tops x WHERE x.seller = status.id AND x.uid <> ?1)')}
-                    WHERE id IN (SELECT seller FROM tops WHERE uid = ?1)`).bind(me.uid),
     env.DB.prepare('DELETE FROM pbatches WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM usets WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM tops WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM sessions WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM users WHERE uid = ?1').bind(me.uid),
-    env.DB.prepare('DELETE FROM meta WHERE k IN (?1, ?2, ?3, ?4)').bind('set:' + me.uid, 'cool:' + me.uid, 'retop:' + me.uid, 'day:' + me.uid)
+    env.DB.prepare('DELETE FROM meta WHERE k IN (?1, ?2, ?3, ?4, ?5)').bind('set:' + me.uid, 'cool:' + me.uid, 'retop:' + me.uid, 'day:' + me.uid, 'items:' + me.uid)
   ]);
   return json({ ok: true });
 }
 
-// Raw Torn bazaar replies for 3 of this user's sellers, to confirm the open flag before relying on it.
-async function probe(env, me) {
-  const ids = (await env.DB.prepare('SELECT value AS seller FROM json_each((SELECT sellers FROM usets WHERE uid = ?1)) LIMIT 3').bind(me.uid).all()).results.map(r => r.seller);
-  const out = {};
-  for (const id of ids) {
-    const r = await fetch(`${env.TORN_BASE || 'https://api.torn.com/v2'}/user/${id}/bazaar?key=${encodeURIComponent(env.TORN_API_KEY || '')}`);
-    const text = await r.text();
-    let raw; try { raw = JSON.parse(text); } catch (e) { raw = text.slice(0, 500); }
-    out[id] = { http: r.status, raw, read_as: parseBazaar(raw) };
-  }
-  return json(out);
+/* ---------- what the 🧭 userscript checks with the player's own key ---------- */
+// The player's sellers (and top 100) so their userscript knows which bazaars to check.
+async function getSellers(env, me) {
+  const [set, tp] = await env.DB.batch([
+    env.DB.prepare('SELECT sellers AS v FROM usets WHERE uid = ?1').bind(me.uid),
+    env.DB.prepare('SELECT seller FROM tops WHERE uid = ?1').bind(me.uid)
+  ]);
+  return rawJson(`{"sellers":${firstV(set) || '[]'},"tops":${JSON.stringify(tp.results.map(r => r.seller))}}`);
 }
-
-// The site key works whatever capitals its name was saved with (TORN_API_KEY, Torn_api_key, ...).
-function withSiteKey(env) {
-  if (env.TORN_API_KEY) return env;
-  const name = Object.keys(env).find(n => n.toLowerCase() === 'torn_api_key');
-  return name ? Object.assign({}, env, { TORN_API_KEY: env[name] }) : env;
+// Results of bazaar checks done by the player's userscript: [[id, is_open, has_bazaar, missing]] and names [[id, name, missing]].
+// Only for sellers in that player's own list; only real changes are written; changes are capped per player per day.
+async function postBazaar(req, env, me) {
+  if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
+  let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
+  const results = (Array.isArray(body && body.results) ? body.results : []).slice(0, 100).map(r => validResult(r)).filter(Boolean);
+  const names = (Array.isArray(body && body.names) ? body.names : []).slice(0, 100)
+    .filter(n => Array.isArray(n) && /^\d{1,10}$/.test(String(n[0])) && typeof n[1] === 'string' && n[1].length <= 40)
+    .map(n => [Number(n[0]), n[1], n[2] ? 1 : 0]);
+  const ids = [...new Set(results.map(r => r[0]).concat(names.map(n => n[0])))];
+  if (!ids.length) return json({ ok: true, changed: 0, needName: [] });
+  const [set, rows] = await env.DB.batch([
+    env.DB.prepare('SELECT sellers AS v FROM usets WHERE uid = ?1').bind(me.uid),
+    env.DB.prepare('SELECT id, is_open, has_bazaar, missing, name, name_t FROM status WHERE id IN (SELECT value FROM json_each(?1))').bind(JSON.stringify(ids))
+  ]);
+  const mine = new Set(JSON.parse(firstV(set) || '[]'));
+  const old = new Map(rows.results.filter(r => mine.has(r.id)).map(r => [r.id, r]));
+  const t = now();
+  const out = {
+    bazaar: results.filter(r => old.has(r[0])).map(r => [r[0], r[1], r[2], r[3], t]),
+    names: names.filter(n => { const o = old.get(n[0]); return o && (!o.name_t || (o.name !== n[1] && t - o.name_t > 7 * 86400)); }).map(n => [n[0], n[1], n[2], t])
+  };
+  const st = saveStatements(env, out, old);
+  const changes = out.changed.length + out.names.length;
+  const named = new Set(names.map(n => n[0]));
+  const needName = results.map(r => r[0]).filter(id => old.has(id) && !old.get(id).name_t && !named.has(id));
+  if (changes) {
+    const q = await dayCounter(env, me.uid);
+    if ((q.changes || 0) + changes > DAY_CAP.changes) return json({ error: capMsg('bazaar changes'), changed: 0, needName }, 429);
+    q.changes = (q.changes || 0) + changes;
+    await env.DB.batch(st.concat(metaSet(env, 'day:' + me.uid, JSON.stringify(q))));
+  }
+  return json({ ok: true, checked: out.bazaar.length, changed: changes, needName });
+}
+// Torn's item list (names and types) as fetched by the player's userscript, kept for that player only.
+async function postItems(req, env, me) {
+  if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
+  if (Number(req.headers.get('Content-Length') || 0) > 2e6) return json({ error: 'Too large' }, 413);
+  let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
+  const items = body && body.items;
+  const ok = items && typeof items === 'object' && !Array.isArray(items) && Object.keys(items).length >= 100 &&
+    Object.entries(items).every(([k, v]) => /^\d{1,6}$/.test(k) && Array.isArray(v) && typeof v[0] === 'string' && typeof v[1] === 'string' && v[0].length < 80 && v[1].length < 40);
+  if (!ok) return json({ error: 'Bad item list' }, 400);
+  const q = await dayCounter(env, me.uid);
+  if ((q.items || 0) + 1 > DAY_CAP.items) return json({ error: capMsg('item list updates') }, 429);
+  q.items = (q.items || 0) + 1;
+  await env.DB.batch([metaSet(env, 'items:' + me.uid, JSON.stringify(items)), metaSet(env, 'day:' + me.uid, JSON.stringify(q))]);
+  return json({ ok: true });
 }
 
 export default {
   // Only /api/* reaches this code; the page itself is served straight from public/.
   async fetch(req, env) {
-    env = withSiteKey(env);
     const url = new URL(req.url), p = url.pathname, m = req.method;
     if (!p.startsWith('/api/')) return env.ASSETS.fetch(req);
     try { return await handle(req, env, url, p, m); }
@@ -460,8 +375,7 @@ export default {
     }
   },
   async scheduled(event, env) {
-    env = withSiteKey(env);
-    try { await withSchema(env, () => cron(env, event && event.scheduledTime)); }
+    try { await withSchema(env, () => cron(env)); }
     catch (e) { console.error('cron error', e && e.stack || e); }
   }
 };
@@ -479,7 +393,6 @@ async function handle(req, env, url, p, m) {
     }
     if (p === '/api/data' && m === 'GET') return getData(env, me, Math.max(0, Number(url.searchParams.get('after')) || 0));
     if (p === '/api/status' && m === 'GET') return getStatus(env, me, Math.max(0, Number(url.searchParams.get('since')) || 0));
-    if (p === '/api/check-now' && m === 'POST') return checkNow(req.clone(), env, me, url);
     if (p === '/api/purchases' && m === 'POST') return upload(req.clone(), env, me);
     if (p === '/api/tops' && m === 'POST') return putTops(req.clone(), env, me);
     if (p === '/api/logout' && m === 'POST') {
@@ -489,7 +402,9 @@ async function handle(req, env, url, p, m) {
     if (p === '/api/forget' && m === 'POST') return forget(env, me);
     if (p === '/api/settings' && m === 'GET') return json(await getSettings(env, me.uid));
     if (p === '/api/settings' && m === 'POST') return putSettings(req.clone(), env, me);
-    if (p === '/api/probe' && m === 'GET') return probe(env, me);
+    if (p === '/api/sellers' && m === 'GET') return getSellers(env, me);
+    if (p === '/api/bazaar' && m === 'POST') return postBazaar(req.clone(), env, me);
+    if (p === '/api/items' && m === 'POST') return postItems(req.clone(), env, me);
     return json({ error: 'Not found' }, 404);
   });
 }

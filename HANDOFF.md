@@ -1,32 +1,35 @@
 # Gilded Compass: handoff
 
-A Torn seller directory (based on the "Torn Seller Directory" build brief) for **any player**: install the userscript, sign in with your own Torn key, see only your own bazaar purchases.
+A Torn seller directory (based on the "Torn Seller Directory" build brief) for **any player**: install the userscript, put your own Torn key in it, see only your own bazaar purchases.
+**The site only works together with the 🧭 userscript**: it reads your log *and* checks your sellers' bazaars with your own key. The site itself never calls Torn except once at sign-in.
 Our own design (not a copy of the original table): Compass cards, gold seals, item icons, the regulars strip, notes per seller, navy/gold theme (light follows the device).
 Tests: `node test.js` (no installs). All work and pushes go to `main`.
 
 ## Rules
 - Only **Bazaar buy** log entries are read (log types whose title starts with "Bazaar buy"), and each entry is checked again before it is kept.
-- Only sellers **with a bazaar** are shown. A seller found to have no bazaar (or a deleted account) is hidden. No-bazaar sellers are re-checked once a day; deleted accounts never.
-- No site password. People sign in with their own Torn key. The key is used for one Torn call (`user/basic`: who owns this key?) and is never stored. They get a random token, and only its SHA-256 is kept (sessions last 180 days).
-- Each player's purchases are stored under their player id and only returned to them. Bazaar flags and seller names are shared (public Torn info).
-- The only secret is `TORN_API_KEY`, the site's own Public key for bazaar checks. The site owner's Cloudflare login is the only password.
+- Only sellers **with a bazaar** are shown. A seller found to have no bazaar (or a deleted account) is hidden (they come back if a later check finds a bazaar).
+- No site password. The userscript signs in with the player's own Torn key. The key is used for one Torn call (`user/basic`: who owns this key?) and is never stored. It gets a random token, and only its SHA-256 is kept (sessions last 180 days). The page gets that token from the userscript (`gc:token` / `gc:signin`) or from `#t=` when 🧭 opens it; the page has no key box.
+- Each player's purchases are stored under their player id and only returned to them. Bazaar flags and seller names are shared (public Torn info), and a player can only report results for sellers in their own list.
+- **No secrets** at all on the Worker (the old `TORN_API_KEY` can be deleted). The site owner's Cloudflare login is the only password.
 
 ## Pieces
 | File | What it is |
 |---|---|
-| `gilded-compass.user.js` | Userscript (Torn PDA + Tampermonkey). Settings: the Torn key only (Custom with log, or PDA's key). Signs in to the site, reads the bazaar-buy log (incremental, resumable) and POSTs purchases. 🧭 tap opens `SITE/#t=<token>` (signed in); hold for settings; drag to move it (phone and computer positions saved separately as `gc_btnpos_phone` / `gc_btnpos`, "Reset 🧭 position" in settings). Site: https://gilded-compass.mysterydryad.workers.dev |
+| `gilded-compass.user.js` | Userscript (Torn PDA + Tampermonkey). Settings: the Torn key only (Custom: user basic, log, bazaar; torn logtypes, items). Signs in to the site, reads the bazaar-buy log (incremental, resumable) and POSTs purchases, and checks the player's sellers' bazaars (see "Bazaar checks"). 🧭 tap opens `SITE/#t=<token>` (signed in); hold for settings; drag to move it (phone and computer positions saved separately as `gc_btnpos_phone` / `gc_btnpos`, "Reset 🧭 position" in settings). Site: https://gilded-compass.mysterydryad.workers.dev |
 | `src/worker.js` | Worker for `/api/*` only (the page is served straight from `public/`). |
-| `src/logic.mjs` | Pure Worker logic (bazaar reply parsing, scheduling, validation, tokens). Tested in `test.js`. |
+| `src/logic.mjs` | Pure Worker logic (change detection, validation, tokens). Tested in `test.js`. |
 | `public/aggregate.js` | Totals per seller and item type, run **in the browser** (free Workers get ~10 ms CPU per request). Tested in `test.js`: 23k purchases in ~25 ms. |
-| `public/index.html` | The page (no build). Sign-in screen with Torn's API-key disclosure table, then the **Compass cards** design: an "Open now · your regulars" strip (your top 50 that are open), a sticky search / sort / Check now bar, a one-line summary, item-type chips with icons, and one card per seller (rank, gold seal: filled = open, hollow = closed, dashed = not checked yet; top item types as icons; buys, items, spent; visit glow; note). Seller names and the strip open the seller's bazaar, `https://www.torn.com/bazaar.php?userId=<id>#/` (the id must come before the `#`, or Torn shows your own bazaar; `#/` on the end, as TornTools and Torn PDA do); the small [id] opens their profile. |
+| `public/index.html` | The page (no build). Without the userscript (or before it is set up, or signed out) a gate screen with Torn's API-key disclosure table, then the **Compass cards** design: an "Open now · your regulars" strip (your top 50 that are open), a sticky search / sort / Check now bar, a one-line summary, item-type chips with icons, and one card per seller (rank, gold seal: filled = open, hollow = closed, dashed = not checked yet; top item types as icons; buys, items, spent; visit glow; note). Seller names and the strip open the seller's bazaar, `https://www.torn.com/bazaar.php?userId=<id>#/` (the id must come before the `#`, or Torn shows your own bazaar; `#/` on the end, as TornTools and Torn PDA do); the small [id] opens their profile. |
 | `public/_headers` | Security headers for the page. |
-| `wrangler.toml` | Assets, D1 binding, cron every minute. |
+| `wrangler.toml` | Assets, D1 binding, hourly housekeeping cron. |
 | `schema.sql` | Copy of the tables (the Worker creates them itself). |
 
 ## API
 `POST /api/login {key}`, `POST /api/logout`, `GET /api/me`, `GET /api/data` (my raw purchases `[ts, seller, items, cost_each, cost_total]` plus Torn's item list, built as JSON by D1 in chunks of 20k rows; the page adds them up),
-`GET /api/status?since=` (my sellers' flags and names changed since), `POST /api/check-now {ids}` (my sellers only, at most 30, JSON, same Origin, 30 s per user, at most 30 lookups per 30 s for everyone),
-`POST /api/purchases {buys}` (idempotent by log id), `POST /api/forget` (delete all my data), `GET /api/probe` (raw Torn bazaar replies for my top 3 sellers).
+`GET /api/status?since=` (my sellers' flags and names changed since), `POST /api/purchases {buys}` (idempotent by log id), `POST /api/tops`, `GET/POST /api/settings`, `POST /api/forget` (delete all my data),
+and for the userscript's checks: `GET /api/sellers` (my seller ids and my top 100), `POST /api/bazaar {results: [[id, is_open, has_bazaar, missing]], names: [[id, name, missing]]}`
+(at most 100 of each; only my own sellers; only changes are written; replies `{checked, changed, needName}`), `POST /api/items {items}` (Torn's item list, kept for me).
+Gone: `/api/check-now`, `/api/probe` (they used the site's own key).
 
 ## Keeping the free Worker light
 Big replies (`/api/data`, `/api/status`) are built as JSON text inside D1 (`json_group_array`) and only glued together in the Worker.
@@ -37,14 +40,21 @@ The top-100 ranking after an upload is one SQL statement. Tested with a history 
 Reading logs needs a **Custom key with log ticked** (or Full). Public and Limited keys are refused by Torn for logs (Arbitrage found Limited gets code 16).
 Signing in to the site works with any key, Public included (only `user/basic` is used).
 
-## Cron (every minute)
-Round robin: each run checks the next sellers of each kind after where the last run stopped (cursors and the time of the run
-in one `meta` row, `rr`), wrapping to the start. `status.kind`: 1 = in someone's top 100 (14 per run), 3 = no bazaar (2 per run),
-2 = everyone else (the rest of the 36 Torn calls), 0 = account gone (never). Names come along the first time a seller is checked.
-**A seller's row is only written when the answer changed** (`statusChanged`); `status.t` = when the last change was seen.
-Subrequests: 2 D1 reads + at most 36 Torn calls + 1 D1 write (+1 read per Worker start for the schema check) - free limit 50.
-A bad site key is stored in `meta.error` and shown on the page. Expired sessions are cleaned hourly.
-Each run logs `cron: checked N, changed N, names N, rows written N` (Worker > Observability > Logs).
+## Bazaar checks (the player's own key, in the userscript)
+Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each player's userscript checks **their own sellers** with **their own key**:
+- **Page open**: right after it loads, a quick check of the cards on screen that were never checked or have no name (≤ 30, 4 at a time); then every
+  2 minutes a background round of 12 sellers (one every 1.5 s) plus up to 8 names. Rounds take turns through the player's top 100 (60%) and the
+  rest of their sellers (cursor `ckpos`, shared between pages); the list comes from `GET /api/sellers` (cached 30 min, refreshed after new purchases).
+- **Torn open**: one round of 8 every 10 minutes (`ckat`, shared, so several tabs don't multiply it).
+- **Check now**: reads the log first (`gc:sync`), then checks the new sellers and the ones on screen (≤ 40, 4 at a time, plus ≤ 16 names) via `gc:check`.
+  A background round in progress stops early to make way.
+- Torn replies: code 6/7 → account gone (`missing`), code 5 / HTTP 429 → stop and post what was done, code 16 → the key lacks `bazaar`
+  (`KEY_NO_BAZAAR` shown on the page via `data-gc-keyerr`; background rounds pause 30 min; setup tests bazaar access on the player's own bazaar).
+- The Worker keeps a result only for sellers in that player's `usets`, writes a row only when the answer changed (`statusChanged`), takes a
+  name the first time (renames after 7 days), and counts changes against the player's daily cap (5,000).
+- Weekly the userscript sends Torn's item list (`torn/items`, needs `items` ticked) to `POST /api/items`; the page uses the player's own list, else the old shared one.
+- Trust: a player could report a false open/closed for their own sellers; the next honest check by anyone corrects it.
+- Cron (hourly, `17 * * * *`): schema upgrades and dropping sign-ins older than 180 days. No Torn calls.
 
 ## Free plan daily limits (why the 500s happened)
 D1 free: 100,000 rows written and 5,000,000 rows read per day (reset 00:00 UTC). Every index adds one written row per write.
@@ -56,8 +66,8 @@ Schema v4 (migrated automatically, all or nothing) keeps the free plan workable 
   stored again but counted once by the page (same log id).
 - **Seller list per player as one row** (`usets`, merged in SQL on each upload). Privacy filter for polls and Check now.
 - **Top 100 worked out by the page** (`POST /api/tops`, only the differences are written; `tops` table). No server ranking.
-- **Cron**: round robin, a seller's row written only when its answer changed, a name found with the first check goes in the
-  same row write; safety brake: above 60,000 cron writes in a day it checks 10 sellers a run and skips names.
+- **Bazaar checks** (now by the userscripts): a seller's row written only when its answer changed, a name found with the first
+  check goes in the same row write. v5 dropped the old cron's indexes (`status_kind`, `tops_seller`), one written row less per change.
 - **New players start at 90 days** of history (existing players keep their setting).
 - **Per player per day**: 500 uploads, 60,000 purchases, 8,000 new sellers, 40 top-100 updates (HTTP 429 with a message; the
   userscript keeps the rest and sends it after midnight UTC).
@@ -67,24 +77,28 @@ Schema v4 (migrated automatically, all or nothing) keeps the free plan workable 
 - Errors come back as `{error}` text (a database-limit error says so) and are logged (`[observability]` in wrangler.toml).
 
 ## Tested locally
-`wrangler dev --local --test-scheduled` with a mock Torn (`TORN_BASE` var) and two players: sign in (good, wrong and badly shaped keys), uploads, data kept apart, no-bazaar sellers hidden and moved to daily checks, check-now limits, delete my data, sign out.
-Playwright: sign-in screen, desktop, phone (no sideways scroll), arriving from 🧭 signed in, and the userscript end to end.
-**Not yet tested against real Torn data**: on the first real run, use the userscript's "Copy debug sample" and `/api/probe`.
+`wrangler dev --local --test-scheduled` with a mock Torn (`TORN_BASE` var) and two players: sign in (good, wrong and badly shaped keys), uploads, data kept apart, no-bazaar sellers hidden, delete my data, sign out.
+Playwright (0.5.0): gate without the userscript (and the userscript arriving late), setup with the new key link and bazaar test, opening from 🧭,
+the quick check on open (seals and names filled from the player's key), Check now (new seller first; a second press changes nothing),
+a fresh tab signed in through the userscript, sign out and back in, a key without `bazaar` (notice), results for someone else's sellers ignored, `/api/check-now` gone.
+Upgrade v4 → v5 tested on a database made by the old code (indexes dropped, sign-ins kept).
 
-## Check now and the userscript
+## The page and the userscript
 - The userscript also runs on the Gilded Compass page (second `@match`), with no button there. It marks the page with
-  `data-gc-userscript` and listens for a `gc:sync` event; when done it writes `data-gc-sync-result` ({added, sellers} or {error}/{busy})
-  and fires `gc:synced`.
-- The page's **Check now**: if the userscript is there, ask it to read the log (waits up to 20 s), reload the data if anything was added,
-  then `POST /api/check-now` with the new sellers first, then the ones on screen (30 max). Without the userscript it only checks bazaars.
-- Torn PDA keeps each site's storage separate, so `apikey`, `token`, `me` and `sync` ({lastSync, logIds, sent, syncedAt}) are also kept in
-  `PDA_storage` (shared by every page, as in Arbitrage) and merged at the start of each sync.
+  `data-gc-userscript="<version>"`, `data-gc-checkedat` (ms) and `data-gc-keyerr`, and answers events (result in an attribute, then an answer event):
+  `gc:token` (sync: `data-gc-token`), `gc:signin` → `gc:signedin` (`data-gc-signin-result` {token} or {error}), `gc:sync` → `gc:synced`
+  (`data-gc-sync-result` {added, sellers} / {error} / {busy}), `gc:check` with `data-gc-check-ids` → `gc:checked` (`data-gc-check-result`
+  {checked, named, changed, error} / {busy}), `gc:debug`, `gc:resetpos`.
+- The page waits up to 4 s for `data-gc-userscript` (a MutationObserver keeps watching after that), takes the userscript's token, and on a
+  401 asks it once to sign in again. Userscripts older than 0.5.0 get an "update" notice (they can still sync purchases, not check).
+- Torn PDA keeps each site's storage separate, so `apikey`, `token`, `me`, `sync`, `ckpos`, `ckat` and `itemsat` are also kept in
+  `PDA_storage` (shared by every page, as in Arbitrage).
 - Self-repair instead of a Re-send button: at the start of a sync, if the site holds 0 purchases (`GET /api/me` → `purchases`) but this
-  device has synced before, the whole log is read again.
+  device has synced before, the whole log is read again. (So "Delete my data" alone comes back on the next sync; the page says to remove the userscript too.)
 
 ## Settings (⚙ on the site, signed in only)
 A page inside the main page (`#settings`, browser Back works): Purchase history (how far back: 30 / 90 / 180 / 365 days or All),
-Visits (glow time, Reset glow, Clear visit marks), Appearance, 🧭 Userscript (on this device? version; Reset 🧭 position),
+Visits (glow time, Reset glow, Clear visit marks), Appearance, 🧭 Userscript (version, what it checks and when, last check, key problems; Reset 🧭 position),
 Help (Copy debug sample: page facts plus the userscript's sample via `gc:debug`, never a key), Account (Sign out, Delete my data),
 and the data/key disclosure.
 - `lookback` is stored per player on the site (`meta` key `set:<uid>`, `GET/POST /api/settings`, also in `/api/data` and `/api/me`).
@@ -100,6 +114,6 @@ and the data/key disclosure.
 ## Deploy (no PowerShell): Cloudflare dashboard + GitHub
 1. D1: Storage & Databases > D1 > Create `gilded-compass`; put its id in `wrangler.toml` (`database_id`).
 2. Workers & Pages > Create > Import a repository > this repo, branch `main` (Workers Builds deploys on every push).
-3. Worker > Settings > Variables and Secrets: `TORN_API_KEY` (a Public-only key).
+3. No Worker secrets are needed (the old `TORN_API_KEY` can be deleted under Worker > Settings > Variables and Secrets).
 4. Userscript updates: GitHub webhook -> Greasy Fork (https://greasyfork.org/en/scripts/605140-gilded-compass) -> Tampermonkey / PDA.
    Users only get an update when `@version` goes up, so bump it (and `VERSION`) with every userscript change.

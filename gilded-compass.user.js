@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.4.3
-// @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
+// @version      0.5.0
+// @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
 // @supportURL   https://github.com/MysteryDryad/Gilded-Compass/issues
@@ -29,11 +29,16 @@
  * - On the Gilded Compass page, "Check now" asks this script to read your log for new purchases first (no button there).
  * - In the background (when you tap 🧭, and every 15 minutes while Torn is open) it reads YOUR new "Bazaar buy"
  *   log entries (bazaar purchases only) and sends them to the site, where only you can see them.
+ * - It checks whether the bazaars of sellers you bought from are open (and their names), with YOUR key: a few every couple
+ *   of minutes while the site is open, a few every 10 minutes while Torn is open, and the ones on screen when you press
+ *   Check now. These are public Torn facts; the site keeps them and shares them with other players who buy from the same sellers.
+ *   It stays gentle (your key's 100 calls a minute are shared with Torn PDA and your other scripts) and backs off when Torn says so.
  *
  * Privacy and safety
  * - Read-only: it never performs game actions, clicks or purchases for you.
- * - Your Torn API key (Custom: user basic + log, torn logtypes) is stored only on this device. It is sent to api.torn.com,
- *   and once to the Gilded Compass site to confirm who you are (the site does not store it). In Torn PDA it can use PDA's key.
+ * - Your Torn API key (Custom: user basic, log, bazaar; torn logtypes, items) is stored only on this device. It is sent to
+ *   api.torn.com, and once to the Gilded Compass site to confirm who you are (the site does not store it). In Torn PDA it can
+ *   use PDA's key.
  */
 (function () {
   'use strict';
@@ -42,7 +47,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.4.3'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.0'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -50,7 +55,7 @@
 
   // Torn PDA keeps each website's storage apart, but its PDA_storage is shared by every page this script runs on
   // (as in Arbitrage). The few things the Gilded Compass page also needs are kept there too.
-  const SHARED = ['apikey', 'token', 'me', 'sync', 'btnpos', 'btnpos_phone'];
+  const SHARED = ['apikey', 'token', 'me', 'sync', 'btnpos', 'btnpos_phone', 'ckpos', 'ckat', 'itemsat'];
   const pda = () => (typeof PDA_storage !== 'undefined' && PDA_storage && typeof PDA_storage.get === 'function' ? PDA_storage : null);
   const cache = {};
   async function loadShared() {
@@ -116,7 +121,8 @@
     site: () => String(sget('site', '') || SITE).replace(/\/+$/, ''), // 'site' in storage only overrides it for testing
     ready: () => !!cfg.key()
   };
-  const KEYURL = 'https://www.torn.com/preferences.php#tab=api?step=addNewKey&title=GildedCompass&user=basic,log&torn=logtypes';
+  const KEYURL = 'https://www.torn.com/preferences.php#tab=api?step=addNewKey&title=GildedCompass&user=basic,log,bazaar&torn=logtypes,items';
+  const KEY_NO_BAZAAR = 'Your key can\'t look at bazaars yet. Make a new key with "Create the key for me" (it now ticks bazaar), then paste it in the 🧭 settings on Torn.';
 
   /* ===================== the site ===================== */
   function siteCall(method, path, body, token) {
@@ -324,6 +330,8 @@
       }
       if (Object.keys(state.pending).length || (firstSync && added)) await sendToSite(firstSync && added ? 'first' : false);
       state.lastError = null; state.syncedAt = Date.now(); save(); shareSync(); setStatus('');
+      itemsIfDue();
+      if (added) sellersCache = null; // new sellers: fetch the list again before the next checks
       setBtn('ok', added ? `Sent ${added} new purchase${added === 1 ? '' : 's'}` : 'Up to date');
       return { added, sellers: [...new Set(sellers)] };
     } catch (e) {
@@ -340,7 +348,114 @@
     return { version: VERSION, inPDA: IN_PDA, usingPdaKey: IN_PDA && !sget('apikey', ''), signedIn: !!sget('token', ''), logTypes: state.logTypesSeen || null,
       logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
       oldest: state.oldest, resume: state.resume ? Object.assign({}, state.resume, { seen: undefined }) : null, lastError: state.lastError,
+      lastCheckAt: state.lastCheckAt || null, lastCheckError: state.lastCheckError || null, keyNoBazaar: !!state.keyNoBazaar,
       rawSamples: state.rawSamples, badSamples: state.badSamples, parsedSample: state.rawSamples.map(parseBuy) };
+  }
+
+  /* ===================== bazaar checks with your own key ===================== */
+  // Same reading of Torn's replies as the site used to do (src/logic.mjs).
+  function parseBazaar(j) {
+    if (!j || typeof j !== 'object') return null;
+    const pick = (o, ks) => { for (const k of ks) if (o && o[k] !== undefined && o[k] !== null) return o[k]; return undefined; };
+    let open = pick(j, ['bazaar_is_open', 'is_open']), exists = pick(j, ['bazaar_exists', 'exists']);
+    if (open === undefined && j.bazaar && typeof j.bazaar === 'object' && !Array.isArray(j.bazaar)) {
+      open = pick(j.bazaar, ['bazaar_is_open', 'is_open']); exists = pick(j.bazaar, ['bazaar_exists', 'exists']);
+    }
+    if (open === undefined) return null;
+    return { is_open: open ? 1 : 0, has_bazaar: exists === undefined ? (open ? 1 : 0) : (exists ? 1 : 0) };
+  }
+  function parseName(j) { const p = (j && (j.profile || j)) || {}; return typeof p.name === 'string' && p.name ? p.name : null; }
+  const CHECK_PAUSE = 1500; // ms between background checks
+  let sellersCache = null;  // your sellers and top 100, from the site
+  async function mySellers() {
+    if (sellersCache && Date.now() - sellersCache.at < 30 * 60000) return sellersCache;
+    let r = await siteCall('GET', '/api/sellers', null, await token());
+    if (r.status === 401) { sset('token', ''); r = await siteCall('GET', '/api/sellers', null, await signIn()); }
+    let j = {}; try { j = JSON.parse(r.text); } catch (e) { /* none */ }
+    sellersCache = { at: Date.now(), sellers: Array.isArray(j.sellers) ? j.sellers : [], tops: Array.isArray(j.tops) ? j.tops : [] };
+    return sellersCache;
+  }
+  // The next few sellers to check, in turn: mostly your top 100, plus the rest of your sellers.
+  async function nextToCheck(n) {
+    const { sellers, tops } = await mySellers();
+    if (!sellers.length) return [];
+    const pos = sget('ckpos', { t: 0, a: 0 });
+    const pick = (list, from, k) => { const out = []; for (let i = 0; i < Math.min(k, list.length); i++) out.push(list[(from + i) % list.length]); return out; };
+    const a = pick(tops, pos.t || 0, tops.length ? Math.ceil(n * 0.6) : 0), b = pick(sellers, pos.a || 0, n - a.length);
+    sset('ckpos', { t: ((pos.t || 0) + a.length) % Math.max(1, tops.length), a: ((pos.a || 0) + b.length) % Math.max(1, sellers.length) });
+    return [...new Set(a.concat(b))];
+  }
+  async function postChecks(body) {
+    let r = await siteCall('POST', '/api/bazaar', body, await token());
+    if (r.status === 401) { sset('token', ''); r = await siteCall('POST', '/api/bazaar', body, await signIn()); }
+    let j = {}; try { j = JSON.parse(r.text); } catch (e) { /* not json */ }
+    if (r.status !== 200) throw new Error(j.error || 'The site answered HTTP ' + r.status);
+    return j;
+  }
+  let checking = false, hurry = false;
+  // Runs fn for each id: fast = 4 at a time with no pause (Check now), otherwise one every 1.5 s, stopping early when a
+  // Check now is waiting. An error thrown by fn stops the rest.
+  async function paced(ids, fn, fast) {
+    if (fast) { for (let i = 0; i < ids.length; i += 4) await Promise.all(ids.slice(i, i + 4).map(fn)); return; }
+    for (const id of ids) { if (hurry) return; await fn(id); await sleep(CHECK_PAUSE); }
+  }
+  // Checks these sellers' bazaars with your key and sends the results, then looks up the names the site doesn't have yet.
+  async function checkBazaars(ids, fast) {
+    if (checking && fast) { hurry = true; for (let i = 0; checking && i < 150; i++) await sleep(200); }
+    if (checking) return { busy: true };
+    hurry = false;
+    if (!cfg.ready()) return { error: 'Set up the 🧭 userscript on Torn first.' };
+    if (!ids.length) return { checked: 0, changed: 0 };
+    checking = true;
+    const results = [], names = [];
+    let error = null, changed = 0;
+    const tornError = e => {
+      if (e.code === 16) { state.keyNoBazaar = Date.now(); return Object.assign(new Error(KEY_NO_BAZAAR), { stop: true }); }
+      if (e.rate) return new Error('Torn says your key is busy right now; the rest are checked a bit later.');
+      if (e.code === 2) state.needsSetup = true;
+      return e;
+    };
+    try {
+      await paced(ids, async id => {
+        try { const b = parseBazaar(await api(`user/${id}/bazaar`)); if (b) results.push([id, b.is_open, b.has_bazaar, 0]); }
+        catch (e) { if (e.code === 6 || e.code === 7) results.push([id, 0, 0, 1]); else if (e.code || e.rate) throw tornError(e); }
+      }, fast);
+    } catch (e) { error = hideKey(e.message || e); }
+    try {
+      if (results.length) {
+        if (!error) state.keyNoBazaar = 0;
+        const j = await postChecks({ results });
+        changed += j.changed || 0;
+        // names come along the first time a seller is checked (a few per round, so your key stays unhurried)
+        if (!error) {
+          await paced((j.needName || []).slice(0, fast ? 16 : 8), async id => {
+            try { const nm = parseName(await api(`user/${id}/basic`)); if (nm) names.push([id, nm, 0]); }
+            catch (e) { if (e.code === 6 || e.code === 7) names.push([id, '(not found)', 1]); else if (e.code || e.rate) throw tornError(e); }
+          }, fast).catch(e => { error = hideKey(e.message || e); });
+        }
+        if (names.length) changed += (await postChecks({ names })).changed || 0;
+      }
+    } catch (e) { error = error || hideKey(e.message || e); }
+    checking = false;
+    state.lastCheckAt = Date.now(); state.lastCheckError = error; save(); sset('ckat', state.lastCheckAt);
+    const de = typeof document !== 'undefined' && document.documentElement;
+    if (de && de.hasAttribute('data-gc-userscript')) { de.setAttribute('data-gc-checkedat', String(state.lastCheckAt)); de.setAttribute('data-gc-keyerr', state.keyNoBazaar ? KEY_NO_BAZAAR : ''); }
+    return { checked: results.length, named: names.length, changed, error };
+  }
+  // Torn's item list (names and types for the filters), weekly, for your page. Skipped if your key can't read it.
+  async function itemsIfDue() {
+    if (Date.now() - (sget('itemsat', 0) || 0) < 7 * 86400000) return;
+    sset('itemsat', Date.now());
+    try {
+      const j = await api('torn/items');
+      const list = Array.isArray(j.items) ? j.items : Object.entries(j.items || {}).map(([id, v]) => Object.assign({ id }, v));
+      const items = {};
+      list.forEach(i => { if (i && i.id && i.name) items[i.id] = [String(i.name).slice(0, 79), String(i.type || 'Unknown').slice(0, 39), i.sub_type || null]; });
+      if (Object.keys(items).length >= 100) {
+        let r = await siteCall('POST', '/api/items', { items }, await token());
+        if (r.status === 401) { sset('token', ''); await siteCall('POST', '/api/items', { items }, await signIn()); }
+      }
+    } catch (e) { /* the site keeps its shared list */ }
   }
 
   /* ===================== UI: the 🧭 button and a one-time setup card ===================== */
@@ -379,14 +494,14 @@
     p.innerHTML = `<h3><span>🧭 Gilded Compass <small style="color:#9aa3b5;font-weight:400">v${VERSION}</small></span><button data-act="close">✕</button></h3>
       <p class="gc-note" style="margin-top:0">Ranks the bazaars you buy from. It reads only your <b>Bazaar buy</b> log, and only you can see your list.</p>
       ${me ? `<p class="gc-note">Signed in as <b style="color:#ece6d6">${esc(me.name || '')}</b> [${esc(me.uid)}]</p>` : ''}
-      <label>Torn API key (Custom, with your log ticked)<input id="gc-key" type="password" autocomplete="off" placeholder="${usingPda ? 'using Torn PDA\'s key' : sget('apikey', '') ? 'saved (leave empty to keep)' : 'paste the new key'}"></label>
+      <label>Torn API key (Custom: log and bazaar ticked)<input id="gc-key" type="password" autocomplete="off" placeholder="${usingPda ? 'using Torn PDA\'s key' : sget('apikey', '') ? 'saved (leave empty to keep)' : 'paste the new key'}"></label>
       <a class="gc-a" href="${KEYURL}" target="_blank" rel="noopener">Create the key for me ↗</a>
       ${IN_PDA && !usingPda ? '<button data-act="usepda">Use Torn PDA\'s key</button>' : ''}
       <div id="gc-msg">${msg.text ? `<div class="${msg.ok ? 'gc-ok' : 'gc-err'}">${esc(msg.text)}</div>` : state.lastError ? `<div class="gc-err">Last sync: ${esc(state.lastError)}</div>` : ''}</div>
       <button data-act="save" class="gc-gold">Save and sign in</button>
       <p class="gc-note" id="gc-status">${statusText()}</p>
       <p class="gc-note">How far back to look, debug sample and deleting your data: <b>⚙</b> on your Gilded Compass page.</p>
-      <p class="gc-note">Read-only: never acts in the game. Your key stays on this device; it goes to api.torn.com, and once to the Gilded Compass site to confirm who you are (not stored there).</p>`;
+      <p class="gc-note">Read-only: never acts in the game. Your key stays on this device. It reads your bazaar purchases and checks whether those sellers' bazaars are open (public info, shared with the site). It goes to api.torn.com, and once to the Gilded Compass site to confirm who you are (not stored there).</p>`;
   }
   function statusText() {
     return (state.sent ? `${state.sent.toLocaleString('en-US')} purchases sent so far` : 'Nothing sent yet')
@@ -424,11 +539,17 @@
       try {
         await api('user/log', { limit: 1 }, key); // the log is the part that needs the right access
         await signIn(key);
+        let noBazaar = false; // can it also look at bazaars? (checked on your own bazaar)
+        try { await api(`user/${(sget('me', {}) || {}).uid}/bazaar`, {}, key); } catch (e) { if (e.code === 16) noBazaar = true; }
+        state.keyNoBazaar = noBazaar ? Date.now() : 0;
         if (key !== (IN_PDA ? PDA_KEY : '')) sset('apikey', key);
         state.needsSetup = false; state.lastError = null; save();
         const me = sget('me', {});
         run('tap'); // starts sending your purchases; your list fills in as they arrive
-        if (openSite(tab)) {
+        if (noBazaar) {
+          if (tab && !tab.closed) { try { tab.close(); } catch (x) { /* ignore */ } }
+          setMsg(`Signed in${me.name ? ' as ' + me.name : ''}, and your purchases are being sent. ` + KEY_NO_BAZAAR, false);
+        } else if (openSite(tab)) {
           setMsg(`All good${me.name ? ', ' + me.name : ''}. Your list is opening; it fills in while your purchases are sent.`, true);
           setTimeout(() => { const p = document.getElementById('gc-setup'); if (p) p.hidden = true; }, 2500);
         } else showOpenLink(`All good${me.name ? ', ' + me.name : ''}. Your purchases are being sent.`);
@@ -548,6 +669,33 @@
   function initSite() {
     const de = document.documentElement;
     de.setAttribute('data-gc-userscript', VERSION);
+    if (state.lastCheckAt) de.setAttribute('data-gc-checkedat', String(state.lastCheckAt));
+    de.setAttribute('data-gc-keyerr', state.keyNoBazaar ? KEY_NO_BAZAAR : '');
+    // the page signs in through this script (it holds your key): a fresh sign-in when the page's has expired
+    document.addEventListener('gc:signin', async () => {
+      let res;
+      try {
+        if (!cfg.ready()) throw new Error('No Torn key in the 🧭 userscript yet. On Torn, tap 🧭 and paste your key.');
+        res = { token: await signIn(), me: sget('me', null) };
+      } catch (e) { res = { error: hideKey(e.message || e) }; }
+      de.setAttribute('data-gc-signin-result', JSON.stringify(res));
+      document.dispatchEvent(new Event('gc:signedin'));
+    });
+    // the page asks who is signed in on this device (so it can sign itself in)
+    document.addEventListener('gc:token', () => { const t = sget('token', ''); if (t) de.setAttribute('data-gc-token', t); de.setAttribute('data-gc-me', JSON.stringify(sget('me', null))); });
+    // Check now: the sellers on screen, with your key, straight away
+    document.addEventListener('gc:check', async () => {
+      let ids = []; try { ids = JSON.parse(de.getAttribute('data-gc-check-ids') || '[]').map(Number).filter(x => x > 0).slice(0, 40); } catch (e) { /* none */ }
+      const res = await checkBazaars(ids, true);
+      de.setAttribute('data-gc-check-result', JSON.stringify(res || {}));
+      document.dispatchEvent(new Event('gc:checked'));
+    });
+    // while this page is open: a few of your sellers every 2 minutes, in turn
+    const bg = async () => {
+      if (document.hidden || !cfg.ready() || state.needsSetup || (state.keyNoBazaar && Date.now() - state.keyNoBazaar < 30 * 60000)) return;
+      try { await checkBazaars(await nextToCheck(12), false); } catch (e) { /* next time */ }
+    };
+    setTimeout(bg, 60000); setInterval(bg, 120000); // the page asks for a quick check of the cards on screen when it opens
     document.addEventListener('gc:debug', () => { de.setAttribute('data-gc-debug', hideKey(JSON.stringify(debugSample()))); });
     document.addEventListener('gc:resetpos', () => { sset('btnpos', null); sset('btnpos_phone', null); de.setAttribute('data-gc-resetpos', String(Date.now())); });
     document.addEventListener('gc:sync', async () => {
@@ -569,13 +717,21 @@
     const auto = () => { if (!document.hidden && cfg.ready() && !state.needsSetup && Date.now() - (state.lastRun || 0) > AUTO_EVERY) run('auto'); };
     setTimeout(auto, 5000);
     setInterval(auto, 60000);
+    // while Torn is open: a few of your sellers' bazaars every 10 minutes, with your key
+    const bg = async () => {
+      if (document.hidden || !cfg.ready() || state.needsSetup || Date.now() - Math.max(state.lastCheckAt || 0, sget('ckat', 0)) < 10 * 60000) return;
+      if (state.keyNoBazaar && Date.now() - state.keyNoBazaar < 30 * 60000) return; // the key can't look at bazaars: wait for a new one
+      try { await checkBazaars(await nextToCheck(8), false); } catch (e) { /* next time */ }
+    };
+    setTimeout(bg, 20000); setInterval(bg, 60000);
   }
 
   if (typeof module !== 'undefined') {
     module.exports = { VERSION, parseBuy, normalizeLog, logTypeList, isBazaarBuy, isFromBazaar,
       // everything the button, the settings box and the site page call; a missing one makes the test fail to load
       wired: { tap, openSite, siteUrl, showOpenLink, openSetup, renderSetup, onSetup, setMsg, setStatus, statusText, run, readRange,
-        sendToSite, siteMe, signIn, token, debugSample, initSite, init, mount, attachPointer, placeBtn, stepAside, setBtn } };
+        sendToSite, siteMe, signIn, token, debugSample, initSite, init, mount, attachPointer, placeBtn, stepAside, setBtn,
+        checkBazaars, paced, nextToCheck, mySellers, postChecks, itemsIfDue, parseBazaar, parseName } };
   }
   if (typeof document !== 'undefined' && !globalThis.__GC_TEST) init();
 })();

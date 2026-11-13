@@ -178,8 +178,10 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
 .login { max-width: 580px; margin: 24px auto 40px; background: linear-gradient(160deg, var(--card2), var(--card)); border: 1px solid var(--line); border-radius: 18px; padding: 24px; box-shadow: var(--shadow); }
 .login h2 { font: 700 20px/1.2 Cinzel, Georgia, serif; color: var(--gold); margin: 0 0 8px; letter-spacing: .04em; }
 .login p { color: var(--muted); margin: 8px 0; }
-.login form { display: flex; gap: 8px; margin: 14px 0 8px; }
-.login input { flex: 1; min-width: 0; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); }
+.login ol { color: var(--muted); margin: 10px 0; padding-left: 22px; }
+.login ol li { margin: 4px 0; }
+.gate-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 6px; }
+.gate-actions a.btn { text-decoration: none; }
 .login a { color: var(--gold); }
 #loginMsg { min-height: 1.4em; color: var(--warn); font-size: 13px; }
 .tos { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12.5px; }
@@ -232,21 +234,16 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   </header>
 
   <section id="login" class="login" hidden>
-    <h2>Sign in with your Torn API key</h2>
-    <p>Everyone sees only their own purchases. Any Torn key works to sign in, even a Public one: it is used once to ask Torn who you are, and is never stored.</p>
-    <form id="loginForm" autocomplete="off">
-      <input id="key" type="password" maxlength="16" placeholder="Torn API key" aria-label="Torn API key">
-      <button class="btn gold" id="loginBtn">Sign in</button>
-    </form>
+    <h2 id="gateTitle">Opening your compass…</h2>
+    <div id="gateBody"></div>
+    <div class="gate-actions" id="gateActions"></div>
     <div id="loginMsg"></div>
-    <p><a href="https://www.torn.com/preferences.php#tab=api?step=addNewKey&amp;title=GildedCompass&amp;user=basic" target="_blank" rel="noopener noreferrer">Create a key for me on Torn ↗</a></p>
-    <p>Your purchases come from the <b>🧭 Gilded Compass</b> userscript on Torn (Torn PDA or Tampermonkey). It reads only your <b>Bazaar buy</b> log. Tap 🧭 on Torn to open this page already signed in.</p>
     <table class="tos" aria-label="How your data and key are used">
-      <tr><th>Data storage</th><td>Your player id and name, and your bazaar purchases (seller, items, price, time) sent by the userscript. Delete them any time with "Delete my data".</td></tr>
-      <tr><th>Data sharing</th><td>None. Only you, signed in with your own key, can see your purchases. Bazaar open/closed flags and seller names are public Torn information.</td></tr>
-      <tr><th>Purpose of use</th><td>Your personal directory of the bazaars you buy from.</td></tr>
-      <tr><th>Key storage &amp; sharing</th><td>Not stored by this site. Your key is sent here once to confirm who you are, then forgotten. The userscript keeps its key only on your device.</td></tr>
-      <tr><th>Key access level</th><td>Sign-in: any (Public is enough). Userscript: Custom with your log ticked, because it reads your bazaar purchase log.</td></tr>
+      <tr><th>Data storage</th><td>Your player id and name, your settings, and your bazaar purchases (seller, items, price, time) sent by the 🧭 userscript. Delete them any time with "Delete my data".</td></tr>
+      <tr><th>Data sharing</th><td>Your purchases: none. Only you, signed in through your own key, can see them. The bazaar open/closed results and seller names your userscript looks up are public Torn information; the site keeps them and shares them with other players who buy from the same sellers.</td></tr>
+      <tr><th>Purpose of use</th><td>Your personal directory of the bazaars you buy from, and which of them are open.</td></tr>
+      <tr><th>Key storage &amp; sharing</th><td>The 🧭 userscript keeps your key on your device only and calls Torn with it directly. It is sent to this site once to confirm who you are, then forgotten: never stored here, never shared.</td></tr>
+      <tr><th>Key access level</th><td>Custom: user <b>basic</b>, <b>log</b> and <b>bazaar</b>; torn <b>logtypes</b> and <b>items</b>. The log gives your bazaar purchases, bazaar shows whether your sellers' bazaars are open, items names the item types. The userscript's "Create the key for me" ticks exactly these.</td></tr>
     </table>
   </section>
 
@@ -387,7 +384,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   let SEEN = new Set(), TOPS = []; // purchase log ids already here (a purchase sent twice counts once); your top 100 as the site knows it
   let DATA = EMPTY;
   const STATUS = new Map(); // id -> { o, b, m, t, name, nt }
-  let since = 0, skew = 0, cronAt = 0, lastUpload = 0, statusErr = null, offline = false, siteErr = null; // siteErr: the site answered with an error
+  let since = 0, skew = 0, lastUpload = 0, offline = false, siteErr = null; // siteErr: the site answered with an error
   const st = { q: '', chip: null, baz: 'any', visit: 'any', sort: ls.get('sort', 'rank'), shown: PAGE };
   let list = [], hiddenNoBazaar = 0;
   let token = ls.get('token', null), started = false;
@@ -411,7 +408,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   const SEAL = { open: 'Open', closed: 'Closed', unchecked: 'Checking' };
   function seal(id) {
     const b = baz(id), s = STATUS.get(id);
-    const tip = s && s.t ? 'Last change seen ' + ago(s.t) + '. Sellers are checked in turn all day; press Check now for a fresh look.' : 'Not checked yet: the first check happens soon';
+    const tip = s && s.t ? 'Last change seen ' + ago(s.t) + '. Your 🧭 userscript checks your sellers in turn while Torn or this page is open; press Check now for a fresh look.' : 'Not checked yet: your 🧭 userscript checks it soon (or press Check now)';
     return `<span class="seal ${b}" title="${esc(tip)}"><i></i>${SEAL[b] || ''}</span>`;
   }
   function visitedAt(id) { return visits[id] || 0; }
@@ -531,14 +528,14 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const ids = DATA.sellers.map(s => s.id).filter(id => baz(id) !== 'none');
     let checked = 0;
     for (const id of ids) { const s = STATUS.get(id); if (s && s.t) checked++; }
-    const stale = !cronAt || serverNow() - cronAt > 300;
-    $('statusline').classList.toggle('stale', stale || offline || !!siteErr);
+    const ckAt = checkedAt(), keyErr = usAttr('data-gc-keyerr'), old = hasUserscript() && !usCanCheck();
+    $('statusline').classList.toggle('stale', offline || !!siteErr || !!keyErr || old);
     $('statustext').textContent = siteErr ? 'Not available right now, retrying…' : offline ? 'Offline, retrying…'
-      : `Live · ${fmt(checked)} of ${fmt(ids.length)} checked` + (cronAt ? ` · last check ${ago(cronAt)}` : '');
+      : `Live · ${fmt(checked)} of ${fmt(ids.length)} checked` + (ckAt ? ` · your 🧭 checked ${agoMs(ckAt)}` : '');
     const n = [];
     if (siteErr) n.push(siteErr);
-    else if (statusErr && statusErr.msg) n.push(`Bazaar checks are paused: ${statusErr.msg}. (Site owner: check the TORN_API_KEY secret.)`);
-    if (!offline && !siteErr && stale && ids.length) n.push(cronAt ? `No bazaar check has run for ${Math.round((serverNow() - cronAt) / 60)} minutes.` : 'No bazaar check has run yet.');
+    if (keyErr) n.push(keyErr);
+    if (old) n.push(`Your 🧭 userscript (version ${usVersion()}) is too old to check bazaars. Update it from Greasy Fork (Tampermonkey: Dashboard › "Check for userscript updates"; Torn PDA updates it on its own).`);
     $('notices').innerHTML = n.map(t => `<div class="notice">${esc(t)}</div>`).join('');
     $('footer').textContent = (lastUpload ? `Purchases last synced ${ago(lastUpload)} by the 🧭 userscript` : 'No purchases synced yet')
       + (hiddenNoBazaar ? ` · ${fmt(hiddenNoBazaar)} seller${hiddenNoBazaar === 1 ? '' : 's'} without a bazaar hidden` : '');
@@ -571,7 +568,10 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     opts.headers = Object.assign({}, opts.headers, token ? { Authorization: 'Bearer ' + token } : {});
     const r = await fetch(url, opts);
     const j = await r.json().catch(() => ({}));
-    if (r.status === 401 && url !== '/api/login') { signedOut(); throw new Error('Please sign in'); }
+    if (r.status === 401) {
+      if (!opts._again && usCanCheck() && await renewToken()) return getJSON(url, Object.assign({}, opts, { _again: true }));
+      signedOut(); throw new Error('Please sign in');
+    }
     if (!r.ok && !j.error) throw new Error('HTTP ' + r.status);
     return Object.assign(j, { _status: r.status });
   }
@@ -627,8 +627,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
         renderStatus(); return;
       }
       if (siteErr && !DATA.purchases && !RAW.length) { siteErr = null; try { await loadData(); render(); } catch (e) { siteErr = e.message; renderStatus(); return; } }
-      siteErr = null; offline = false; skew = j.now - Date.now() / 1000; cronAt = j.cronAt;
-      statusErr = j.error && typeof j.error === 'object' ? j.error : null; // a problem with the site's own Torn key
+      siteErr = null; offline = false; skew = j.now - Date.now() / 1000;
       if (j.until) since = Math.max(since, j.until);
       const changed = [];
       for (const [id, o, b, m, t, name, nt] of j.rows) {
@@ -654,24 +653,77 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     if (first < 0) first = 0;
     return cards.slice(first, first + 30).map(c => Number(c.dataset.id));
   }
-  // With the 🧭 userscript on this page, Check now first asks it to read your log for new purchases (new sellers).
-  const hasUserscript = () => !!document.documentElement.getAttribute('data-gc-userscript');
-  function readLogViaUserscript(waitMs) {
+  /* ---------- the 🧭 userscript on this page (required: it reads your log and checks bazaars with your own key) ---------- */
+  // It marks the page with data-gc-userscript="<version>" and answers events: ask -> answer, with the result in an attribute.
+  const usAttr = a => document.documentElement.getAttribute(a) || '';
+  const usVersion = () => usAttr('data-gc-userscript');
+  const hasUserscript = () => !!usVersion();
+  const verAtLeast = (v, min) => {
+    const a = String(v).split('.').map(Number), b = min.split('.').map(Number);
+    for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+    return true;
+  };
+  const usCanCheck = () => hasUserscript() && verAtLeast(usVersion(), '0.5.0'); // 0.5.0: bazaar checks and sign-in through it
+  const checkedAt = () => Number(usAttr('data-gc-checkedat')) || 0; // when it last checked bazaars (this browser's clock)
+  function bridge(ask, answer, attr, waitMs) {
     return new Promise(resolve => {
       const de = document.documentElement;
-      const done = r => { clearTimeout(timer); document.removeEventListener('gc:synced', onDone); resolve(r); };
-      const onDone = () => { let r = {}; try { r = JSON.parse(de.getAttribute('data-gc-sync-result') || '{}'); } catch (e) { /* ignore */ } done(r); };
+      const done = r => { clearTimeout(timer); document.removeEventListener(answer, onDone); resolve(r); };
+      const onDone = () => { let r = {}; try { r = JSON.parse(de.getAttribute(attr) || '{}'); } catch (e) { /* ignore */ } de.removeAttribute(attr); done(r); };
       const timer = setTimeout(() => done({ timeout: true }), waitMs);
-      document.addEventListener('gc:synced', onDone);
-      document.dispatchEvent(new Event('gc:sync'));
+      document.addEventListener(answer, onDone);
+      document.dispatchEvent(new Event(ask));
     });
+  }
+  const readLogViaUserscript = ms => bridge('gc:sync', 'gc:synced', 'data-gc-sync-result', ms);
+  function checkViaUserscript(ids, ms) {
+    document.documentElement.setAttribute('data-gc-check-ids', JSON.stringify(ids));
+    return bridge('gc:check', 'gc:checked', 'data-gc-check-result', ms);
+  }
+  // Sign-in comes from the userscript (it holds your key): first the token it already has, else it signs in again.
+  function tokenFromUserscript() {
+    const de = document.documentElement;
+    de.removeAttribute('data-gc-token');
+    document.dispatchEvent(new Event('gc:token')); // answered straight away
+    const t = de.getAttribute('data-gc-token'); de.removeAttribute('data-gc-token');
+    return /^[A-Za-z0-9_-]{20,100}$/.test(t || '') ? t : null;
+  }
+  let renewing = null;
+  function renewToken() {
+    if (!renewing) renewing = bridge('gc:signin', 'gc:signedin', 'data-gc-signin-result', 30000).then(r => {
+      renewing = null;
+      if (r && /^[A-Za-z0-9_-]{20,100}$/.test(r.token || '')) { token = r.token; ls.set('token', token); return token; }
+      $('loginMsg').textContent = (r && r.error) || (r && r.timeout ? 'The 🧭 userscript did not answer.' : '');
+      return null;
+    });
+    return renewing;
+  }
+  function waitForUserscript(ms) {
+    return new Promise(resolve => {
+      if (hasUserscript()) { resolve(true); return; }
+      const de = document.documentElement;
+      const mo = new MutationObserver(() => { if (hasUserscript()) { mo.disconnect(); clearTimeout(t); resolve(true); } });
+      mo.observe(de, { attributes: true, attributeFilter: ['data-gc-userscript'] });
+      const t = setTimeout(() => { mo.disconnect(); resolve(false); }, ms);
+    });
+  }
+  // Once when the page opens: a quick check of the cards on screen that were never checked (or have no name yet).
+  let autoChecked = false;
+  async function autoCheck() {
+    if (autoChecked || !usCanCheck()) return;
+    autoChecked = true;
+    const ids = idsOnScreen().filter(id => baz(id) === 'unchecked' || !nameOf(id)).slice(0, 30);
+    if (!ids.length) return;
+    const r = await checkViaUserscript(ids, 90000);
+    if (!r.timeout) await poll();
   }
   async function checkNow() {
     const btn = $('checkBtn'), msg = $('checkMsg'), label = '⟳ Check now';
     btn.disabled = true; msg.textContent = '';
     const notes = [];
     let fresh = [];
-    if (hasUserscript()) {
+    if (!hasUserscript()) notes.push('Check now needs the 🧭 userscript on this device');
+    else {
       btn.textContent = 'Reading your log…';
       const r = await readLogViaUserscript(20000);
       if (r.error) notes.push(r.error);
@@ -682,15 +734,19 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
         try { await loadData(true); render(); } catch (e) { /* shown on the next poll */ }
       } else notes.push('No new purchases');
     }
-    const ids = [...new Set(fresh.concat(idsOnScreen()))].slice(0, 30); // new sellers first, then the ones on screen
-    if (ids.length) {
+    // then your userscript checks the bazaars with your key: new sellers first, then the ones on screen
+    const ids = [...new Set(fresh.concat(idsOnScreen()))].slice(0, 40);
+    if (hasUserscript() && !usCanCheck()) notes.push('update the 🧭 userscript to check bazaars');
+    else if (ids.length && hasUserscript()) {
       btn.textContent = 'Checking bazaars…';
-      try {
-        const j = await getJSON('/api/check-now', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
-        if (j.wait) notes.push(`bazaars were checked moments ago, try again in ${j.wait}s`);
-        else notes.push(j.error ? j.error : `checked ${j.checked} bazaar${j.checked === 1 ? '' : 's'}` + (j.partial ? ' (some skipped)' : ''));
-        await poll();
-      } catch (e) { notes.push('Check failed: ' + e.message); }
+      const r = await checkViaUserscript(ids, 90000);
+      if (r.timeout) notes.push('still checking; the cards update as results arrive');
+      else if (r.busy) notes.push('your 🧭 userscript is busy checking, try again in a moment');
+      else {
+        if (r.checked || !r.error) notes.push(`checked ${fmt(r.checked)} bazaar${r.checked === 1 ? '' : 's'}` + (r.changed ? ` (${fmt(r.changed)} changed)` : ''));
+        if (r.error) notes.push(r.error);
+      }
+      await poll();
     }
     const text = notes.join(' · ');
     msg.textContent = text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
@@ -814,9 +870,12 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function fillSettings() {
     document.querySelectorAll('[data-lookback]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.lookback) === (Number(SETTINGS.lookback) || 0))));
     const v = document.documentElement.getAttribute('data-gc-userscript');
-    $('usStatus').innerHTML = v
-      ? `On this device: <b>version ${esc(v)}</b>. It sends your new purchases (every 15 minutes while Torn is open, and when you press Check now).`
-      : 'Not on this device. Purchases are still synced from wherever you have it. To add it here: <a href="https://greasyfork.org/en/scripts/605140-gilded-compass" target="_blank" rel="noopener noreferrer" style="color:var(--gold)">install from Greasy Fork ↗</a>';
+    const gf = '<a href="https://greasyfork.org/en/scripts/605140-gilded-compass" target="_blank" rel="noopener noreferrer" style="color:var(--gold)">Greasy Fork ↗</a>';
+    const ck = checkedAt(), ke = usAttr('data-gc-keyerr');
+    $('usStatus').innerHTML = !v ? 'Not on this device. This page needs it: ' + gf
+      : !usCanCheck() ? `On this device: <b>version ${esc(v)}</b>. Please update it (${gf}) so it can check bazaars with your key.`
+      : `On this device: <b>version ${esc(v)}</b>. With your own key it sends your new purchases (every 15 minutes while Torn is open) and checks your sellers' bazaars: a few every 2 minutes while this page is open, a few every 10 minutes while Torn is open, and the ones on screen when you press Check now.`
+        + (ck ? ` Last check ${esc(agoMs(ck))}.` : '') + (ke ? ` <b>${esc(ke)}</b>` : '');
     $('resetPosRow').hidden = !v;
     $('usMsg').textContent = ''; $('lookbackMsg').textContent = ''; $('debugMsg').textContent = '';
   }
@@ -852,7 +911,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     let checked = 0; for (const s of DATA.sellers) { const x = STATUS.get(s.id); if (x && x.t) checked++; }
     const sample = {
       page: { me: ME && ME.uid, lookbackDays: Number(SETTINGS.lookback) || 0, storedPurchases: RAW.length, shownPurchases: DATA.purchases,
-        sellers: DATA.sellers.length, checked, hiddenNoBazaar, first: DATA.first, last: DATA.last, lastUpload, cronAt, error: statusErr,
+        sellers: DATA.sellers.length, checked, hiddenNoBazaar, first: DATA.first, last: DATA.last, lastUpload,
+        checkedAt: checkedAt() || null, keyErr: usAttr('data-gc-keyerr') || null, siteErr,
         itemTypes: Object.keys(ITEMS).length, screen: [window.innerWidth, window.innerHeight] },
       userscript: us
     };
@@ -870,19 +930,46 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     $('login').hidden = on; $('app').hidden = !on; $('who').hidden = !on; $('cogBtn').hidden = !on;
     if (!on) showSettings(false);
   }
-  function signedOut() {
+  // The screen shown instead of the list: looking for the userscript, not installed, not set up, signed out, deleted.
+  const GF = 'https://greasyfork.org/en/scripts/605140-gilded-compass';
+  function showGate(kind) {
+    const T = {
+      wait: ['Opening your compass…', '<p>Looking for the 🧭 userscript on this device…</p>', ''],
+      none: ['Gilded Compass needs the 🧭 userscript',
+        `<p>This page lists the bazaars you buy from. The 🧭 userscript is what fills it: it reads your bazaar purchases and checks which of those bazaars are open, all with your own Torn key, so it has to be on the device you open this page on.</p>
+        <ol><li>Install it from Greasy Fork (Tampermonkey on a computer; in Torn PDA, add it to PDA's userscripts).</li>
+        <li>On Torn, tap 🧭 and paste your key ("Create the key for me" makes the right one).</li>
+        <li>Tap 🧭 again: this page opens, signed in.</li></ol>`,
+        `<a class="btn gold" href="${GF}" target="_blank" rel="noopener noreferrer">Install from Greasy Fork ↗</a>`],
+      setup: ['Set up your 🧭 userscript',
+        `<p>The userscript is here (version ${esc(usVersion())}) but has no Torn key yet. On Torn, tap 🧭 and paste your key ("Create the key for me" makes the right one), then tap 🧭 again to come back here signed in.</p>`,
+        '<a class="btn gold" href="https://www.torn.com/" target="_blank" rel="noopener noreferrer">Open Torn ↗</a> <button class="btn" data-gate="retry">I\'ve done it</button>'],
+      signedout: ['Signed out', '<p>Sign in again with the key in your 🧭 userscript.</p>', '<button class="btn gold" data-gate="retry">Sign in</button>'],
+      deleted: ['Your data is deleted',
+        '<p>Everything this site kept for you is gone. To stop sending purchases, remove the 🧭 userscript too; otherwise it signs in again and sends them on its next sync.</p>',
+        '<button class="btn" data-gate="retry">Sign in again</button>']
+    }[kind];
+    $('gateTitle').textContent = T[0]; $('gateBody').innerHTML = T[1]; $('gateActions').innerHTML = T[2];
+    showApp(false);
+  }
+  $('gateActions').addEventListener('click', e => {
+    if (!e.target.closest('[data-gate="retry"]')) return;
+    $('loginMsg').textContent = ''; boot(true);
+  });
+  function signedOut(kind) {
     token = null; ls.set('token', null);
-    DATA = EMPTY; RAW = []; ME = null; LAST = 0; SEEN = new Set(); TOPS = []; STATUS.clear(); since = 0;
+    DATA = EMPTY; RAW = []; ME = null; LAST = 0; SEEN = new Set(); TOPS = []; STATUS.clear(); since = 0; autoChecked = false;
     $('tagline').textContent = 'Every bazaar you buy from'; $('whoName').textContent = ''; $('svWho').textContent = ''; // nothing of the last person stays on screen
     $('rows').innerHTML = ''; $('strip').innerHTML = '';
     if (location.hash === '#settings') history.replaceState(null, '', location.pathname + location.search);
-    showApp(false);
+    showGate(kind || 'signedout');
   }
   async function start() {
     showApp(true);
     try { await loadData(); siteErr = null; } catch (e) { if (!token) return; siteErr = e.message; }
     await poll();
     render();
+    autoCheck();
     if (location.hash === '#settings') { history.replaceState({ gc: 'settings' }, '', '#settings'); showSettings(true); }
     if (started) return;
     started = true;
@@ -891,18 +978,6 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     setInterval(() => { if (!document.hidden && token) renderStatus(); }, 5000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden && token) poll(); });
   }
-  $('loginForm').addEventListener('submit', async e => {
-    e.preventDefault();
-    const key = $('key').value.trim(); if (!key) return;
-    $('loginBtn').disabled = true; $('loginMsg').textContent = '';
-    try {
-      const j = await getJSON('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
-      if (!j.token) throw new Error(j.error || 'Sign in failed');
-      token = j.token; ls.set('token', token);
-      await start();
-    } catch (err) { $('loginMsg').textContent = err.message; }
-    $('key').value = ''; $('loginBtn').disabled = false;
-  });
   $('logoutBtn').addEventListener('click', async () => {
     try { await getJSON('/api/logout', { method: 'POST' }); } catch (e) { /* signed out anyway */ }
     signedOut();
@@ -917,7 +992,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     }
     clearTimeout(forgetT); b.classList.remove('armed'); b.textContent = 'Delete my data';
     try { await getJSON('/api/forget', { method: 'POST' }); } catch (err) { /* ignore */ }
-    signedOut();
+    signedOut('deleted');
   });
 
   /* ---------- start ---------- */
@@ -928,9 +1003,28 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     token = hm[1]; ls.set('token', token); history.replaceState(null, '', location.pathname + location.search);
     return true;
   }
-  tokenFromAddress();
-  window.addEventListener('hashchange', () => { if (tokenFromAddress()) start(); }); // a 🧭 link opened in a tab that already shows this page
-  if (token) start(); else showApp(false);
+  // The page only works with the 🧭 userscript on this device: wait a moment for it, then sign in through it.
+  let booting = false;
+  async function boot(again) {
+    if (booting) return;
+    booting = true;
+    try {
+      tokenFromAddress();
+      const slow = setTimeout(() => { if (!hasUserscript()) showGate('wait'); }, 600);
+      const has = await waitForUserscript(4000);
+      clearTimeout(slow);
+      if (!has) { showGate('none'); waitForUserscript(30 * 60000).then(ok => { if (ok) boot(); }); return; }
+      if (usCanCheck()) {
+        const t = tokenFromUserscript(); // the account whose key does the checking
+        if (t) { if (t !== token) { token = t; ls.set('token', t); } }
+        else if (again || !token) await renewToken(); // it has a key but no sign-in yet (or you pressed Sign in)
+      }
+      if (!token) { showGate(again ? 'signedout' : 'setup'); return; }
+      await start();
+    } finally { booting = false; }
+  }
+  window.addEventListener('hashchange', () => { if (/[#&]t=/.test(location.hash)) boot(); }); // a 🧭 link opened in a tab that already shows this page
+  boot();
 })();
 </script>
 </body>

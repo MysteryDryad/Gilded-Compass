@@ -18,13 +18,12 @@ binding = "DB"
 database_name = "gilded-compass"
 database_id = "38424d54-39f3-4386-a762-cfed0fbc861b"
 
-# Keep the Worker's logs (errors, and one line per bazaar-check run) in the dashboard: Worker > Observability.
+# Keep the Worker's logs (errors) in the dashboard: Worker > Observability.
 [observability]
 enabled = true
 
-# Check bazaars every minute.
+# Hourly housekeeping (old sign-ins, database upgrades). Bazaar checks are done by the players' userscripts.
 [triggers]
-crons = ["* * * * *"]
+crons = ["17 * * * *"]
 
-# One secret, set in the dashboard (Worker > Settings > Variables and Secrets), never in this file:
-#   TORN_API_KEY   the site's own Torn key with Public access only, used to check bazaars and names
+# No secrets needed: the site never calls Torn except once at sign-in, with the player's own key.
