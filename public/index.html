@@ -387,7 +387,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   let SEEN = new Set(), TOPS = []; // purchase log ids already here (a purchase sent twice counts once); your top 100 as the site knows it
   let DATA = EMPTY;
   const STATUS = new Map(); // id -> { o, b, m, t, name, nt }
-  let since = 0, skew = 0, cronAt = 0, lastUpload = 0, statusErr = null, offline = false;
+  let since = 0, skew = 0, cronAt = 0, lastUpload = 0, statusErr = null, offline = false, siteErr = null; // siteErr: the site answered with an error
   const st = { q: '', chip: null, baz: 'any', visit: 'any', sort: ls.get('sort', 'rank'), shown: PAGE };
   let list = [], hiddenNoBazaar = 0;
   let token = ls.get('token', null), started = false;
@@ -532,12 +532,13 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     let checked = 0;
     for (const id of ids) { const s = STATUS.get(id); if (s && s.t) checked++; }
     const stale = !cronAt || serverNow() - cronAt > 300;
-    $('statusline').classList.toggle('stale', stale || offline);
-    $('statustext').textContent = offline ? 'Offline, retrying…'
+    $('statusline').classList.toggle('stale', stale || offline || !!siteErr);
+    $('statustext').textContent = siteErr ? 'Not available right now, retrying…' : offline ? 'Offline, retrying…'
       : `Live · ${fmt(checked)} of ${fmt(ids.length)} checked` + (cronAt ? ` · last check ${ago(cronAt)}` : '');
     const n = [];
-    if (statusErr) n.push(`Bazaar checks are paused: ${statusErr.msg}. (Site owner: check the TORN_API_KEY secret.)`);
-    if (!offline && stale && ids.length) n.push(cronAt ? `No bazaar check has run for ${Math.round((serverNow() - cronAt) / 60)} minutes.` : 'No bazaar check has run yet.');
+    if (siteErr) n.push(siteErr);
+    else if (statusErr && statusErr.msg) n.push(`Bazaar checks are paused: ${statusErr.msg}. (Site owner: check the TORN_API_KEY secret.)`);
+    if (!offline && !siteErr && stale && ids.length) n.push(cronAt ? `No bazaar check has run for ${Math.round((serverNow() - cronAt) / 60)} minutes.` : 'No bazaar check has run yet.');
     $('notices').innerHTML = n.map(t => `<div class="notice">${esc(t)}</div>`).join('');
     $('footer').textContent = (lastUpload ? `Purchases last synced ${ago(lastUpload)} by the 🧭 userscript` : 'No purchases synced yet')
       + (hiddenNoBazaar ? ` · ${fmt(hiddenNoBazaar)} seller${hiddenNoBazaar === 1 ? '' : 's'} without a bazaar hidden` : '');
@@ -577,6 +578,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   // more = true: only purchases added since the last fetch (cheap for the site's free database allowance).
   async function loadData(more) {
     const d = await getJSON('/api/data' + (more && LAST ? '?after=' + LAST : ''));
+    if (d._status !== 200 || !Array.isArray(d.purchases)) throw new Error(typeof d.error === 'string' ? d.error : 'The site answered HTTP ' + d._status);
     ME = d.me || null;
     if (ME) { const who = `<b>${esc(ME.name || 'player')}</b> [${ME.uid}]`; $('whoName').innerHTML = who; $('svWho').innerHTML = who; }
     if (!(more && LAST)) { RAW = []; SEEN = new Set(); }
@@ -620,7 +622,13 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     try {
       polledAt = Date.now();
       const j = await getJSON('/api/status?since=' + since);
-      offline = false; skew = j.now - Date.now() / 1000; cronAt = j.cronAt; statusErr = j.error;
+      if (j._status !== 200 || !Array.isArray(j.rows)) { // an error reply (e.g. the daily database limit), not a status update
+        siteErr = typeof j.error === 'string' ? j.error : 'The site answered HTTP ' + j._status;
+        renderStatus(); return;
+      }
+      if (siteErr && !DATA.purchases && !RAW.length) { siteErr = null; try { await loadData(); render(); } catch (e) { siteErr = e.message; renderStatus(); return; } }
+      siteErr = null; offline = false; skew = j.now - Date.now() / 1000; cronAt = j.cronAt;
+      statusErr = j.error && typeof j.error === 'object' ? j.error : null; // a problem with the site's own Torn key
       if (j.until) since = Math.max(since, j.until);
       const changed = [];
       for (const [id, o, b, m, t, name, nt] of j.rows) {
@@ -872,7 +880,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   }
   async function start() {
     showApp(true);
-    try { await loadData(); } catch (e) { if (!token) return; offline = true; }
+    try { await loadData(); siteErr = null; } catch (e) { if (!token) return; siteErr = e.message; }
     await poll();
     render();
     if (location.hash === '#settings') { history.replaceState({ gc: 'settings' }, '', '#settings'); showSettings(true); }
