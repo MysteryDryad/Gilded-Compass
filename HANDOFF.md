@@ -6,6 +6,9 @@ Our own design (not a copy of the original table): Compass cards, gold seals, it
 Tests: `node test.js` (no installs). All work and pushes go to `main`.
 
 ## Rules
+- **60 days of history for everyone** (`HISTORY_DAYS` in `src/worker.js`, `HISTORY_DAYS` in the userscript). Purchases older than that
+  are refused on upload and deleted daily; a seller not bought from in 60 days drops off the player's list (new sellers take their place)
+  and comes back with the next purchase. No per-player choice.
 - Only **Bazaar buy** log entries are read (log types whose title starts with "Bazaar buy"), and each entry is checked again before it is kept.
 - Only sellers **with a bazaar** are shown. A seller found to have no bazaar (or a deleted account) is hidden (they come back if a later check finds a bazaar).
 - No site password. The userscript signs in with the player's own Torn key. The key is used for one Torn call (`user/basic`: who owns this key?) and is never stored. It gets a random token, and only its SHA-256 is kept (sessions last 180 days). The page gets that token from the userscript (`gc:token` / `gc:signin`) or from `#t=` when 🧭 opens it; the page has no key box.
@@ -26,7 +29,7 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 
 ## API
 `POST /api/login {key}`, `POST /api/logout`, `GET /api/me`, `GET /api/data` (my raw purchases `[ts, seller, items, cost_each, cost_total]` plus Torn's item list, built as JSON by D1 in chunks of 20k rows; the page adds them up),
-`GET /api/status?since=` (my sellers' flags and names changed since), `POST /api/purchases {buys}` (idempotent by log id), `POST /api/tops`, `GET/POST /api/settings`, `POST /api/forget` (delete all my data),
+`GET /api/status?since=` (my sellers' flags and names changed since), `POST /api/purchases {buys}` (idempotent by log id), `POST /api/tops`, `GET /api/settings` (`{lookback: 60}`, fixed; POST changes nothing), `POST /api/forget` (delete all my data),
 and for the userscript's checks: `GET /api/sellers` (my seller ids and my top 100), `POST /api/bazaar {results: [[id, is_open, has_bazaar, missing]], names: [[id, name, missing]]}`
 (at most 100 of each; only my own sellers; only changes are written; replies `{checked, changed, needName}`), `POST /api/items {items}` (Torn's item list, kept for me).
 Gone: `/api/check-now`, `/api/probe` (they used the site's own key).
@@ -68,8 +71,11 @@ History: on the free plan (100,000 writes / 5,000,000 reads a day) the old minut
 - **Top 100 worked out by the page** (`POST /api/tops`, only the differences are written; `tops` table). No server ranking.
 - **Bazaar checks** (by the userscripts): a seller's row written only when its answer changed, a name found with the first
   check goes in the same row write. v5 dropped the old cron's indexes (`status_kind`, `tops_seller`), one written row less per change.
-- **New players start with all their history** (`NEW_USER_LOOKBACK = 0`; it was 90 days on the free plan, and players who joined
-  then keep 90 until they pick "All" in Settings).
+- **60 days for everyone** (schema v6): each bundle stores its newest purchase time (`pbatches.tmax`). Once a day (the hourly cron,
+  first run of each UTC day, marker `meta.pruned`) the Worker deletes bundles whose newest purchase is older than 60 days, rebuilds each
+  player's `usets` from the purchases inside the 60 days (players with none are removed), and deletes `tops` and shared `status` rows of
+  sellers no longer in anyone's list. A bundle that straddles the line stays until its newest purchase is old (the page and seller lists
+  only count purchases inside the 60 days). Logged as `prune: bundles N players N tops N sellers N`.
 - **Per player per day** (UTC), as a cost guard: 2,000 uploads, 300,000 purchases, 40,000 new sellers, 200 top-100 updates,
   20,000 bazaar changes, 5 item lists. Worst case about 150,000 written rows for one player in a day. Over a cap: HTTP 429 with a
   message; the userscript keeps the rest and sends it later.
@@ -100,13 +106,13 @@ Upgrade v4 → v5 tested on a database made by the old code (indexes dropped, si
   device has synced before, the whole log is read again. (So "Delete my data" alone comes back on the next sync; the page says to remove the userscript too.)
 
 ## Settings (⚙ on the site, signed in only)
-A page inside the main page (`#settings`, browser Back works): Purchase history (how far back: 30 / 90 / 180 / 365 days or All),
+A page inside the main page (`#settings`, browser Back works): Purchase history (explains the fixed 60 days; no choices),
 Visits (glow time, Reset glow, Clear visit marks), Appearance, 🧭 Userscript (version, what it checks and when, last check, key problems; Reset 🧭 position),
 Help (Copy debug sample: page facts plus the userscript's sample via `gc:debug`, never a key), Account (Sign out, Delete my data),
 and the data/key disclosure.
-- `lookback` is stored per player on the site (`meta` key `set:<uid>`, `GET/POST /api/settings`, also in `/api/data` and `/api/me`).
-  The page only counts purchases inside the range. The userscript reads only that far back on the first sync; when the range is
-  widened it reads just the older stretch (`state.oldest`, resume kind `older`). Narrowing never deletes anything.
+- `lookback` is 60 for everyone (in `/api/settings`, `/api/data` and `/api/me`; the old per-player `set:<uid>` rows were removed in v6).
+  The page only counts purchases inside it. The userscript (0.5.1) never reads further back than 60 days, even if the site doesn't
+  answer; if an earlier, shorter range left part of the 60 days unread, it reads just that stretch (`state.oldest`, resume kind `older`).
 - The userscript's own box is now only the key and sign-in; everything else lives here.
 
 ## Repo hygiene

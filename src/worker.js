@@ -14,7 +14,7 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, uid INTEGER NOT NULL, created INTEGER NOT NULL)',
   'CREATE INDEX IF NOT EXISTS sessions_uid ON sessions(uid)',
   // one row per upload: data = JSON [[ts, seller, [[item, qty]], cost_each, cost_total, log id], ...]
-  'CREATE TABLE IF NOT EXISTS pbatches (seq INTEGER PRIMARY KEY, uid INTEGER NOT NULL, n INTEGER NOT NULL, data TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS pbatches (seq INTEGER PRIMARY KEY, uid INTEGER NOT NULL, n INTEGER NOT NULL, data TEXT NOT NULL, tmax INTEGER NOT NULL DEFAULT 0)',
   'CREATE INDEX IF NOT EXISTS pbatches_uid ON pbatches(uid)',
   // one row per player: JSON list of the sellers they bought from
   'CREATE TABLE IF NOT EXISTS usets (uid INTEGER PRIMARY KEY, sellers TEXT NOT NULL)',
@@ -23,7 +23,7 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS status (id INTEGER PRIMARY KEY, is_open INTEGER, has_bazaar INTEGER, missing INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL DEFAULT 0, top INTEGER NOT NULL DEFAULT 0, kind INTEGER NOT NULL DEFAULT 2, name TEXT, name_t INTEGER NOT NULL DEFAULT 0, u INTEGER NOT NULL DEFAULT 0)',
   'CREATE INDEX IF NOT EXISTS status_u ON status(u)',
   'CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)',
-  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '5')"
+  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '6')"
 ];
 const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owner jailed, inactive, too low, paused
 const SESSION_DAYS = 180;
@@ -32,7 +32,10 @@ const TOP_TIER = 100;
 // Workers Paid (since 2026-11-13) includes 50 million rows written a month; these caps keep one player's worst day near
 // 150,000 written rows (a few cents), while a real first sync of a big history (26,000 purchases, 4,000 sellers) fits easily.
 const DAY_CAP = { purchases: 300000, sellers: 40000, uploads: 2000, tops: 200, changes: 20000, items: 5 };
-const NEW_USER_LOOKBACK = 0;  // days of history a new player starts with: 0 = all of it (they can narrow it in Settings)
+// Everyone's list covers the last 60 days of bazaar purchases: older purchases are refused and deleted, and a seller not
+// bought from in 60 days drops off (new sellers take their place). Keeps the database small.
+const HISTORY_DAYS = 60;
+const historyStart = () => now() - HISTORY_DAYS * 86400;
 const now = () => Math.floor(Date.now() / 1000);
 const HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: HEADERS });
@@ -53,7 +56,8 @@ async function withSchema(env, fn) {
 // v3: one `u` column (when anything about a seller last changed) with an index, so the status poll reads only changed rows.
 // v4: purchases in bundles, seller lists as one row per player, top 100 in its own small table (old tables copied, then dropped).
 // v5: bazaar checks moved to the players' userscripts; the old cron's indexes (each an extra written row per change) go.
-const SCHEMA_VERSION = 5;
+// v6: 60 days of history for everyone: each bundle knows its newest purchase (tmax) so old ones can be dropped; no per-player range.
+const SCHEMA_VERSION = 6;
 const MIGRATIONS = {
   2: ['CREATE INDEX IF NOT EXISTS status_kind ON status(kind)', 'DROP INDEX IF EXISTS status_kind_t', 'DROP INDEX IF EXISTS status_name'],
   3: ['ALTER TABLE status ADD COLUMN u INTEGER NOT NULL DEFAULT 0', 'UPDATE status SET u = MAX(t, name_t) WHERE u = 0 AND (t > 0 OR name_t > 0)',
@@ -67,7 +71,10 @@ const MIGRATIONS = {
       'INSERT OR IGNORE INTO usets (uid, sellers) SELECT uid, json_group_array(seller) FROM user_sellers GROUP BY uid',
       'INSERT OR IGNORE INTO tops (uid, seller) SELECT uid, seller FROM user_sellers WHERE top = 1',
       'DROP TABLE IF EXISTS purchases', 'DROP TABLE IF EXISTS user_sellers'],
-  5: ['DROP INDEX IF EXISTS status_kind', 'DROP INDEX IF EXISTS tops_seller', "DELETE FROM meta WHERE k IN ('error', 'rr', 'itemsAt') OR k LIKE 'win:%' OR k LIKE 'cool:%' OR k LIKE 'retop:%'"]
+  5: ['DROP INDEX IF EXISTS status_kind', 'DROP INDEX IF EXISTS tops_seller', "DELETE FROM meta WHERE k IN ('error', 'rr', 'itemsAt') OR k LIKE 'win:%' OR k LIKE 'cool:%' OR k LIKE 'retop:%'"],
+  6: ['ALTER TABLE pbatches ADD COLUMN tmax INTEGER NOT NULL DEFAULT 0',
+      "UPDATE pbatches SET tmax = (SELECT MAX(json_extract(value, '$[0]')) FROM json_each(pbatches.data))",
+      "DELETE FROM meta WHERE k LIKE 'set:%'"]
 };
 let migrated = false;
 async function migrate(env) {
@@ -138,6 +145,26 @@ function saveStatements(env, out, old) {
 async function cron(env) {
   await migrate(env);
   await env.DB.prepare('DELETE FROM sessions WHERE created < ?1').bind(now() - SESSION_DAYS * 86400).run();
+  await prune(env);
+}
+// Once a day: drop purchases older than 60 days, sellers nobody has bought from in 60 days, and what hangs off them.
+// A bundle is dropped when its newest purchase is old; a bundle that straddles the line stays until then (the page and the
+// seller lists only count the purchases inside the 60 days).
+async function prune(env) {
+  const day = new Date().toISOString().slice(0, 10);
+  if (firstV(await metaGet(env, 'pruned').run()) === day) return;
+  const start = historyStart();
+  const r = await env.DB.batch([
+    env.DB.prepare('DELETE FROM pbatches WHERE tmax < ?1').bind(start),
+    // each player's seller list: only sellers with a purchase in the last 60 days
+    env.DB.prepare(`UPDATE usets SET sellers = n.s FROM (SELECT b.uid, json_group_array(DISTINCT json_extract(p.value, '$[1]')) AS s
+        FROM pbatches b, json_each(b.data) p WHERE json_extract(p.value, '$[0]') >= ?1 GROUP BY b.uid) AS n WHERE usets.uid = n.uid`).bind(start),
+    env.DB.prepare(`DELETE FROM usets WHERE uid NOT IN (SELECT b.uid FROM pbatches b, json_each(b.data) p WHERE json_extract(p.value, '$[0]') >= ?1)`).bind(start),
+    env.DB.prepare('DELETE FROM tops WHERE NOT EXISTS (SELECT 1 FROM usets u, json_each(u.sellers) j WHERE u.uid = tops.uid AND j.value = tops.seller)'),
+    env.DB.prepare('DELETE FROM status WHERE id NOT IN (SELECT j.value FROM usets u, json_each(u.sellers) j)'),
+    metaSet(env, 'pruned', day)
+  ]);
+  console.log('prune: bundles', r[0].meta.changes, 'players', r[2].meta.changes, 'tops', r[3].meta.changes, 'sellers', r[4].meta.changes);
 }
 
 /* ---------- sign in ---------- */
@@ -162,9 +189,6 @@ async function login(req, env) {
   if (!(uid > 0)) return json({ error: 'Torn did not say who owns this key. Try again.' }, 502);
   const token = newToken();
   await env.DB.batch([
-    // a new player starts with NEW_USER_LOOKBACK days of history (0 = all, which needs no row); existing players keep their setting
-    ...(NEW_USER_LOOKBACK ? [env.DB.prepare('INSERT OR IGNORE INTO meta (k, v) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM users WHERE uid = ?3)')
-      .bind('set:' + uid, JSON.stringify({ lookback: NEW_USER_LOOKBACK }), uid)] : []),
     env.DB.prepare('INSERT INTO users (uid, name, created) VALUES (?1, ?2, ?3) ON CONFLICT(uid) DO UPDATE SET name = excluded.name').bind(uid, p.name || null, now()),
     env.DB.prepare('INSERT INTO sessions (hash, uid, created) VALUES (?1, ?2, ?3)').bind(await sha256hex(token), uid, now())
   ]);
@@ -172,40 +196,22 @@ async function login(req, env) {
 }
 
 /* ---------- the user's settings ---------- */
-// lookback: how many days back to look for purchases (0 = all of your history). Read by the page and by the userscript.
-const LOOKBACK_CHOICES = [0, 30, 90, 180, 365];
-const DEFAULT_SETTINGS = { lookback: 0 };
-async function getSettings(env, uid) {
-  const v = firstV(await metaGet(env, 'set:' + uid).run());
-  try { return Object.assign({}, DEFAULT_SETTINGS, v ? JSON.parse(v) : {}); } catch (e) { return Object.assign({}, DEFAULT_SETTINGS); }
-}
-async function putSettings(req, env, me) {
-  if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
-  let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
-  const cur = await getSettings(env, me.uid);
-  if (body && body.lookback !== undefined) {
-    const d = Number(body.lookback);
-    if (!LOOKBACK_CHOICES.includes(d)) return json({ error: 'lookback must be one of ' + LOOKBACK_CHOICES.join(', ') }, 400);
-    cur.lookback = d;
-  }
-  await metaSet(env, 'set:' + me.uid, JSON.stringify(cur)).run();
-  return json(cur);
-}
+// lookback: how many days back the page and the userscript look for purchases. The same 60 days for everyone (no choice).
+const SETTINGS = { lookback: HISTORY_DAYS };
 
 /* ---------- the user's data ---------- */
 // Raw purchases [ts, seller, items, cost_each, cost_total, log id] plus Torn's item list; the browser adds them up.
 // `after`: only bundles stored after that one (an open page fetches just the new ones). `last` says where to carry on.
 async function getData(env, me, after) {
-  const [b, items, u, set, tp] = await env.DB.batch([
-    env.DB.prepare('SELECT seq, data FROM pbatches WHERE uid = ?1 AND seq > ?2 ORDER BY seq').bind(me.uid, after),
-    env.DB.prepare("SELECT v FROM meta WHERE k IN (?1, 'items') ORDER BY k = 'items' LIMIT 1").bind('items:' + me.uid), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid), metaGet(env, 'set:' + me.uid),
+  const [b, items, u, tp] = await env.DB.batch([
+    env.DB.prepare('SELECT seq, data FROM pbatches WHERE uid = ?1 AND seq > ?2 AND tmax >= ?3 ORDER BY seq').bind(me.uid, after, historyStart()),
+    env.DB.prepare("SELECT v FROM meta WHERE k IN (?1, 'items') ORDER BY k = 'items' LIMIT 1").bind('items:' + me.uid), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('SELECT seller FROM tops WHERE uid = ?1').bind(me.uid)
   ]);
   const parts = b.results.map(r => inner(r.data)).filter(Boolean);
   const last = b.results.length ? b.results[b.results.length - 1].seq : after;
-  const settings = Object.assign({}, DEFAULT_SETTINGS, JSON.parse(firstV(set) || '{}'));
   return rawJson(`{"me":${JSON.stringify(me)},"purchases":[${parts.join(',')}],"items":${firstV(items) || '{}'},` +
-    `"settings":${JSON.stringify(settings)},"tops":${JSON.stringify(tp.results.map(r => r.seller))},` +
+    `"settings":${JSON.stringify(SETTINGS)},"tops":${JSON.stringify(tp.results.map(r => r.seller))},` +
     `"last":${Number(last) || 0},"lastUpload":${Number(firstV(u)) || 0},"now":${now()}}`);
 }
 // Only this user's sellers. First load (since = 0): walk the player's seller list once. Later polls: find the few rows
@@ -247,25 +253,27 @@ async function upload(req, env, me) {
   if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
   if (Number(req.headers.get('Content-Length') || 0) > 4e6) return json({ error: 'Too large, send smaller chunks' }, 413);
   let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
-  const buys = (Array.isArray(body && body.buys) ? body.buys : []).map(validBuy).filter(Boolean);
-  if (buys.length > 2000) return json({ error: 'At most 2000 purchases per request' }, 413);
+  const all = (Array.isArray(body && body.buys) ? body.buys : []).map(validBuy).filter(Boolean);
+  if (all.length > 2000) return json({ error: 'At most 2000 purchases per request' }, 413);
+  const start = historyStart(), buys = all.filter(b => b.ts >= start); // older than 60 days: accepted but not kept
+  if (!buys.length) return json({ ok: true, received: all.length, inserted: 0 });
   const q = await dayCounter(env, me.uid);
   const S = JSON.stringify([...new Set(buys.map(b => b.s))]);
-  let fresh = 0;
-  if (buys.length) fresh = (await env.DB.prepare('SELECT COUNT(*) AS n FROM json_each(?1) WHERE value NOT IN (SELECT id FROM status)').bind(S).first()).n;
+  const fresh = (await env.DB.prepare('SELECT COUNT(*) AS n FROM json_each(?1) WHERE value NOT IN (SELECT id FROM status)').bind(S).first()).n;
   if (q.uploads + 1 > DAY_CAP.uploads) return json({ error: capMsg('uploads') }, 429);
   if (q.purchases + buys.length > DAY_CAP.purchases) return json({ error: capMsg('purchases') }, 429);
   if (q.sellers + fresh > DAY_CAP.sellers) return json({ error: capMsg('new sellers') }, 429);
   q.uploads++; q.purchases += buys.length; q.sellers += fresh;
   const st = [];
-  if (buys.length) st.push(
-    env.DB.prepare('INSERT INTO pbatches (uid, n, data) VALUES (?1, ?2, ?3)').bind(me.uid, buys.length, JSON.stringify(buys.map(b => [b.ts, b.s, b.it, b.ce, b.ct, b.id]))),
+  st.push(
+    env.DB.prepare('INSERT INTO pbatches (uid, n, data, tmax) VALUES (?1, ?2, ?3, ?4)')
+      .bind(me.uid, buys.length, JSON.stringify(buys.map(b => [b.ts, b.s, b.it, b.ce, b.ct, b.id])), Math.max(...buys.map(b => b.ts))),
     env.DB.prepare(`INSERT INTO usets (uid, sellers) VALUES (?1, ?2) ON CONFLICT(uid) DO UPDATE SET sellers =
         (SELECT json_group_array(value) FROM (SELECT value FROM json_each(usets.sellers) UNION SELECT value FROM json_each(excluded.sellers)))`).bind(me.uid, S),
     env.DB.prepare('INSERT OR IGNORE INTO status (id) SELECT value FROM json_each(?1)').bind(S));
   st.push(env.DB.prepare('UPDATE users SET last_upload = ?2 WHERE uid = ?1').bind(me.uid, now()), metaSet(env, 'day:' + me.uid, JSON.stringify(q)));
   await env.DB.batch(st);
-  return json({ ok: true, received: buys.length, inserted: buys.length });
+  return json({ ok: true, received: all.length, inserted: buys.length });
 }
 // Your page works out your top 100 sellers and sends it here; only the differences are written.
 // Your 🧭 userscript checks these bazaars more often.
@@ -299,7 +307,7 @@ async function forget(env, me) {
     env.DB.prepare('DELETE FROM tops WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM sessions WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('DELETE FROM users WHERE uid = ?1').bind(me.uid),
-    env.DB.prepare('DELETE FROM meta WHERE k IN (?1, ?2, ?3, ?4, ?5)').bind('set:' + me.uid, 'cool:' + me.uid, 'retop:' + me.uid, 'day:' + me.uid, 'items:' + me.uid)
+    env.DB.prepare('DELETE FROM meta WHERE k IN (?1, ?2)').bind('day:' + me.uid, 'items:' + me.uid)
   ]);
   return json({ ok: true });
 }
@@ -391,7 +399,7 @@ async function handle(req, env, url, p, m) {
     if (p === '/api/me' && m === 'GET') {
       const c = await env.DB.prepare('SELECT EXISTS (SELECT 1 FROM pbatches WHERE uid = ?1) AS has').bind(me.uid).first();
       const has = !!(c && c.has); // `purchases` stays for older userscripts: 0 = none, 1 = some
-      return json(Object.assign({}, me, { hasPurchases: has, purchases: has ? 1 : 0, settings: await getSettings(env, me.uid) }));
+      return json(Object.assign({}, me, { hasPurchases: has, purchases: has ? 1 : 0, settings: SETTINGS }));
     }
     if (p === '/api/data' && m === 'GET') return getData(env, me, Math.max(0, Number(url.searchParams.get('after')) || 0));
     if (p === '/api/status' && m === 'GET') return getStatus(env, me, Math.max(0, Number(url.searchParams.get('since')) || 0));
@@ -402,8 +410,8 @@ async function handle(req, env, url, p, m) {
       return json({ ok: true });
     }
     if (p === '/api/forget' && m === 'POST') return forget(env, me);
-    if (p === '/api/settings' && m === 'GET') return json(await getSettings(env, me.uid));
-    if (p === '/api/settings' && m === 'POST') return putSettings(req.clone(), env, me);
+    if (p === '/api/settings' && m === 'GET') return json(SETTINGS);
+    if (p === '/api/settings' && m === 'POST') return json(SETTINGS); // nothing to choose any more (history is 60 days for everyone)
     if (p === '/api/sellers' && m === 'GET') return getSellers(env, me);
     if (p === '/api/bazaar' && m === 'POST') return postBazaar(req.clone(), env, me);
     if (p === '/api/items' && m === 'POST') return postItems(req.clone(), env, me);

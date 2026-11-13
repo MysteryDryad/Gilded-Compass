@@ -165,10 +165,6 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
 .sv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
 .sv-msg { font-size: 12.5px; color: var(--gold); margin-top: 8px; }
 .sv-msg:empty { display: none; }
-.choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 6px; margin-top: 10px; }
-.choices button { padding: 8px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: 13px; }
-.choices button:hover { border-color: var(--gold); }
-.choices button[aria-pressed="true"] { background: var(--gold); border-color: var(--gold); color: var(--on-gold); font-weight: 600; }
 .sv-card .seg { flex-wrap: wrap; }
 .sv-card summary { cursor: pointer; color: var(--gold); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; font-weight: 700; }
 #debugOut { width: 100%; min-height: 140px; margin-top: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: 11.5px/1.4 ui-monospace, Menlo, monospace; padding: 8px; }
@@ -239,7 +235,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     <div class="gate-actions" id="gateActions"></div>
     <div id="loginMsg"></div>
     <table class="tos" aria-label="How your data and key are used">
-      <tr><th>Data storage</th><td>Your player id and name, your settings, and your bazaar purchases (seller, items, price, time) sent by the 🧭 userscript. Delete them any time with "Delete my data".</td></tr>
+      <tr><th>Data storage</th><td>Your player id and name, and your bazaar purchases from the last 60 days (seller, items, price, time) sent by the 🧭 userscript. Older purchases are deleted automatically. Delete everything any time with "Delete my data".</td></tr>
       <tr><th>Data sharing</th><td>Your purchases: none. Only you, signed in through your own key, can see them. The bazaar open/closed results and seller names your userscript looks up are public Torn information; the site keeps them and shares them with other players who buy from the same sellers.</td></tr>
       <tr><th>Purpose of use</th><td>Your personal directory of the bazaars you buy from, and which of them are open.</td></tr>
       <tr><th>Key storage &amp; sharing</th><td>The 🧭 userscript keeps your key on your device only and calls Torn with it directly. It is sent to this site once to confirm who you are, then forgotten: never stored here, never shared.</td></tr>
@@ -290,11 +286,9 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
 
       <div class="sv-card">
         <h3>Purchase history</h3>
-        <p>How far back to look for purchases. Shorter lists are quicker; widen it any time and the 🧭 userscript reads the older part on its next sync.</p>
-        <div class="choices" role="group" aria-label="How far back" id="lookbackSeg">
-          <button data-lookback="30">30 days</button><button data-lookback="90">90 days</button><button data-lookback="180">6 months</button><button data-lookback="365">1 year</button><button data-lookback="0">All</button>
-        </div>
-        <div class="sv-msg" id="lookbackMsg"></div>
+        <p>Your list covers your bazaar purchases from the <b>last 60 days</b> (the same for everyone, to keep the site quick).
+          Older purchases are deleted, and a seller you haven't bought from in 60 days drops off; new sellers take their place.
+          Buy from them again and they come straight back, notes and all.</p>
       </div>
 
       <div class="sv-card">
@@ -379,7 +373,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   let span = ls.get('span', 3600);
 
   const EMPTY = { sellers: [], purchases: 0, first: 0, last: 0, lastUpload: 0 };
-  let RAW = [], ITEMS = {}, SETTINGS = { lookback: 0 }, ME = null; // as sent by the site; the list is worked out from these
+  let RAW = [], ITEMS = {}, SETTINGS = { lookback: 60 }, ME = null; // as sent by the site; the list is worked out from these
   let LAST = 0; // the last purchase bundle this page has, so later fetches bring only new ones
   let SEEN = new Set(), TOPS = []; // purchase log ids already here (a purchase sent twice counts once); your top 100 as the site knows it
   let DATA = EMPTY;
@@ -589,7 +583,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     }
     LAST = Number(d.last) || LAST;
     TOPS = d.tops || TOPS;
-    ITEMS = d.items || {}; SETTINGS = Object.assign({ lookback: 0 }, d.settings);
+    ITEMS = d.items || {}; SETTINGS = Object.assign({ lookback: 60 }, d.settings);
     skew = d.now - Date.now() / 1000;
     build(d.lastUpload || 0);
     sendTops();
@@ -617,7 +611,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const range = days ? ` (last ${LOOKBACK_LABEL[days]})` : '';
     $('tagline').textContent = DATA.purchases ? `${fmt(DATA.purchases)} bazaar purchases since ${day(DATA.first)}${range}` : 'Every bazaar you buy from';
   }
-  const LOOKBACK_LABEL = { 30: '30 days', 90: '90 days', 180: '6 months', 365: 'year', 0: 'all' };
+  const LOOKBACK_LABEL = { 30: '30 days', 60: '60 days', 90: '90 days', 180: '6 months', 365: 'year', 0: 'all' };
   async function poll() {
     try {
       polledAt = Date.now();
@@ -868,7 +862,6 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   });
   window.addEventListener('popstate', () => showSettings(location.hash === '#settings' && !!token));
   function fillSettings() {
-    document.querySelectorAll('[data-lookback]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.lookback) === (Number(SETTINGS.lookback) || 0))));
     const v = document.documentElement.getAttribute('data-gc-userscript');
     const gf = '<a href="https://greasyfork.org/en/scripts/605140-gilded-compass" target="_blank" rel="noopener noreferrer" style="color:var(--gold)">Greasy Fork ↗</a>';
     const ck = checkedAt(), ke = usAttr('data-gc-keyerr');
@@ -877,24 +870,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
       : `On this device: <b>version ${esc(v)}</b>. With your own key it sends your new purchases (every 15 minutes while Torn is open) and checks your sellers' bazaars: a few every 2 minutes while this page is open, a few every 10 minutes while Torn is open, and the ones on screen when you press Check now.`
         + (ck ? ` Last check ${esc(agoMs(ck))}.` : '') + (ke ? ` <b>${esc(ke)}</b>` : '');
     $('resetPosRow').hidden = !v;
-    $('usMsg').textContent = ''; $('lookbackMsg').textContent = ''; $('debugMsg').textContent = '';
+    $('usMsg').textContent = ''; $('debugMsg').textContent = '';
   }
-  // How far back to look for purchases: saved on the site, so the page and the userscript (on every device) use it.
-  document.querySelectorAll('[data-lookback]').forEach(b => b.addEventListener('click', async () => {
-    const days = Number(b.dataset.lookback), before = Number(SETTINGS.lookback) || 0;
-    if (days === before) return;
-    $('lookbackMsg').textContent = 'Saving…';
-    try {
-      const j = await getJSON('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lookback: days }) });
-      if (j.error) throw new Error(j.error);
-      SETTINGS = Object.assign({ lookback: 0 }, j);
-      build(lastUpload); render(); fillSettings(); sendTops();
-      const wider = !days || (before && days > before);
-      $('lookbackMsg').textContent = `Saved: ${days ? 'the last ' + LOOKBACK_LABEL[days] : 'all your history'}.`
-        + (wider ? ' The 🧭 userscript reads any older purchases on its next sync.' : '');
-      if (wider && document.documentElement.getAttribute('data-gc-userscript')) readLogViaUserscript(1000); // start that now; the list updates as they arrive
-    } catch (e) { $('lookbackMsg').textContent = 'Could not save: ' + e.message; }
-  }));
   $('resetPos').addEventListener('click', () => {
     document.dispatchEvent(new Event('gc:resetpos'));
     $('usMsg').textContent = document.documentElement.getAttribute('data-gc-resetpos')

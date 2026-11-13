@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.0
+// @version      0.5.1
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -47,10 +47,11 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.0'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.1'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
+  const HISTORY_DAYS = 60;          // the site keeps the last 60 days of purchases for everyone, so it never reads further back
   const CHUNK = 1000;               // purchases per upload
 
   // Torn PDA keeps each website's storage apart, but its PDA_storage is shared by every page this script runs on
@@ -225,7 +226,7 @@
   }
   /* ===================== sync: log -> site ===================== */
   // Reads one stretch of your log, newest first, from `toStart` (null = now) back to `from` (0 = the very beginning).
-  // kind 'new' = entries since the last sync; 'older' = an older stretch, read after the history range was widened (⚙ on the site).
+  // kind 'new' = entries since the last sync; 'older' = an older stretch inside the 60 days not read yet (e.g. after an earlier, shorter range).
   // Progress is saved every page, so a stopped read carries on next time.
   // onChunk: called whenever 1,000 purchases are waiting, so the site fills in while a long read is still going.
   async function readRange(from, toStart, kind, onChunk) {
@@ -295,7 +296,7 @@
     try { const j = JSON.parse(r.text); return r.status === 200 ? j : null; } catch (e) { return null; }
   }
   let running = false;
-  // Reads new log entries (and, if the history range was widened, the older stretch) and sends them.
+  // Reads new log entries (and any older stretch of the last 60 days not read yet) and sends them.
   // Returns { added, sellers } (or { busy } / { error }).
   async function run(why) {
     if (running) return { busy: true };
@@ -307,15 +308,15 @@
       try { await loadShared(); } catch (e) { /* fine without */ }
       mergeShared(); // carry on from where another page (e.g. the Gilded Compass page in PDA) got to
       const site = await siteMe();
-      const days = site && site.settings ? Number(site.settings.lookback) || 0 : 0;
-      const start = days ? Math.floor(Date.now() / 1000) - days * 86400 : 0; // how far back to look (0 = all your history)
+      const days = Number(site && site.settings && site.settings.lookback) || HISTORY_DAYS;
+      const start = Math.floor(Date.now() / 1000) - days * 86400; // how far back to look (the site keeps 60 days)
       if (state.lastSync && state.oldest == null) state.oldest = 0; // earlier versions always read everything
       // Self-repair: if the site holds none of your purchases (for example after "Delete my data"), read the log again.
       if (state.lastSync && !state.resume && !Object.keys(state.pending).length && site && site.purchases === 0) { state.lastSync = 0; state.oldest = null; save(); }
       let added = 0, sellers = [];
       const firstSync = !state.lastSync;
       const take = x => { added += x.added; sellers = sellers.concat(x.sellers); };
-      if (state.resume && state.resume.kind === 'older') { const x = await readRange(0, null, 'older', sendToSite); take(x); state.oldest = x.from; }
+      if (state.resume && state.resume.kind === 'older') { const x = await readRange(start, null, 'older', sendToSite); take(x); state.oldest = x.from; }
       if (!state.lastSync) { // first read: back to the start of your history range
         const x = await readRange(start, null, 'new', sendToSite); take(x);
         if (x.newest) state.lastSync = x.newest;

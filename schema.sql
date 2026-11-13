@@ -1,12 +1,13 @@
--- Gilded Compass database (Cloudflare D1), schema v5. The Worker creates these by itself on first use and upgrades
+-- Gilded Compass database (Cloudflare D1), schema v6. The Worker creates these by itself on first use and upgrades
 -- older databases automatically (see MIGRATIONS in src/worker.js); this file is a copy for reference.
 CREATE TABLE IF NOT EXISTS users (uid INTEGER PRIMARY KEY, name TEXT, created INTEGER NOT NULL, last_upload INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, uid INTEGER NOT NULL, created INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS sessions_uid ON sessions(uid);
--- one row per upload: data = JSON [[ts, seller, [[item, qty]], cost_each, cost_total, log id], ...]
-CREATE TABLE IF NOT EXISTS pbatches (seq INTEGER PRIMARY KEY, uid INTEGER NOT NULL, n INTEGER NOT NULL, data TEXT NOT NULL);
+-- one row per upload: data = JSON [[ts, seller, [[item, qty]], cost_each, cost_total, log id], ...]; tmax = newest ts in it
+-- (purchases are kept for 60 days: a bundle is deleted once its newest purchase is older than that)
+CREATE TABLE IF NOT EXISTS pbatches (seq INTEGER PRIMARY KEY, uid INTEGER NOT NULL, n INTEGER NOT NULL, data TEXT NOT NULL, tmax INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS pbatches_uid ON pbatches(uid);
--- one row per player: JSON list of the sellers they bought from
+-- one row per player: JSON list of the sellers they bought from in the last 60 days (rebuilt daily)
 CREATE TABLE IF NOT EXISTS usets (uid INTEGER PRIMARY KEY, sellers TEXT NOT NULL);
 -- each player's top 100 (sent by their page); their userscript checks these more often
 CREATE TABLE IF NOT EXISTS tops (uid INTEGER NOT NULL, seller INTEGER NOT NULL, PRIMARY KEY (uid, seller)) WITHOUT ROWID;
