@@ -843,7 +843,9 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   }
   function signedOut() {
     token = null; ls.set('token', null);
-    DATA = EMPTY; RAW = []; ME = null; STATUS.clear(); since = 0;
+    DATA = EMPTY; RAW = []; ME = null; LAST = 0; STATUS.clear(); since = 0;
+    $('tagline').textContent = 'Every bazaar you buy from'; $('whoName').textContent = ''; $('svWho').textContent = ''; // nothing of the last person stays on screen
+    $('rows').innerHTML = ''; $('strip').innerHTML = '';
     if (location.hash === '#settings') history.replaceState(null, '', location.pathname + location.search);
     showApp(false);
   }
