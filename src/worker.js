@@ -29,8 +29,10 @@ const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owne
 const SESSION_DAYS = 180;
 const TOP_TIER = 100;
 // One player per day (generous for a real first sync; stops one person draining the shared allowance).
-const DAY_CAP = { purchases: 60000, sellers: 8000, uploads: 500, tops: 40, changes: 5000, items: 3 };
-const NEW_USER_LOOKBACK = 90;  // days of history a new player starts with (they can widen it in Settings)
+// Workers Paid (since 2026-11-13) includes 50 million rows written a month; these caps keep one player's worst day near
+// 150,000 written rows (a few cents), while a real first sync of a big history (26,000 purchases, 4,000 sellers) fits easily.
+const DAY_CAP = { purchases: 300000, sellers: 40000, uploads: 2000, tops: 200, changes: 20000, items: 5 };
+const NEW_USER_LOOKBACK = 0;  // days of history a new player starts with: 0 = all of it (they can narrow it in Settings)
 const now = () => Math.floor(Date.now() / 1000);
 const HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: HEADERS });
@@ -160,9 +162,9 @@ async function login(req, env) {
   if (!(uid > 0)) return json({ error: 'Torn did not say who owns this key. Try again.' }, 502);
   const token = newToken();
   await env.DB.batch([
-    // a new player starts with 90 days of history (a lighter first sync); existing players keep their setting
-    env.DB.prepare('INSERT OR IGNORE INTO meta (k, v) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM users WHERE uid = ?3)')
-      .bind('set:' + uid, JSON.stringify({ lookback: NEW_USER_LOOKBACK }), uid),
+    // a new player starts with NEW_USER_LOOKBACK days of history (0 = all, which needs no row); existing players keep their setting
+    ...(NEW_USER_LOOKBACK ? [env.DB.prepare('INSERT OR IGNORE INTO meta (k, v) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM users WHERE uid = ?3)')
+      .bind('set:' + uid, JSON.stringify({ lookback: NEW_USER_LOOKBACK }), uid)] : []),
     env.DB.prepare('INSERT INTO users (uid, name, created) VALUES (?1, ?2, ?3) ON CONFLICT(uid) DO UPDATE SET name = excluded.name').bind(uid, p.name || null, now()),
     env.DB.prepare('INSERT INTO sessions (hash, uid, created) VALUES (?1, ?2, ?3)').bind(await sha256hex(token), uid, now())
   ]);
@@ -371,7 +373,7 @@ export default {
       console.error('api error', p, e && e.stack || e);
       const msg = String(e && e.message || e);
       const limit = /limit|exceeded|quota/i.test(msg);
-      return json({ error: limit ? 'The site is over its free daily database limit. It resets at midnight UTC; please try again later.' : 'Server error: ' + msg.slice(0, 200) }, limit ? 503 : 500);
+      return json({ error: limit ? 'The site\'s database is at a limit right now. Please try again in a few minutes.' : 'Server error: ' + msg.slice(0, 200) }, limit ? 503 : 500);
     }
   },
   async scheduled(event, env) {

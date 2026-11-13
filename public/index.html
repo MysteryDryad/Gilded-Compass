@@ -575,7 +575,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     if (!r.ok && !j.error) throw new Error('HTTP ' + r.status);
     return Object.assign(j, { _status: r.status });
   }
-  // more = true: only purchases added since the last fetch (cheap for the site's free database allowance).
+  // more = true: only purchases added since the last fetch (quicker, and light on the site's database).
   async function loadData(more) {
     const d = await getJSON('/api/data' + (more && LAST ? '?after=' + LAST : ''));
     if (d._status !== 200 || !Array.isArray(d.purchases)) throw new Error(typeof d.error === 'string' ? d.error : 'The site answered HTTP ' + d._status);
@@ -594,8 +594,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     build(d.lastUpload || 0);
     sendTops();
   }
-  // Your top 100 sellers (in your history range) decide which bazaars the site checks most often. The page works it out
-  // and tells the site only when it changed (the site's free database allowance is too small to work it out there).
+  // Your top 100 sellers (in your history range): your 🧭 userscript checks these most often. The page works it out
+  // and tells the site only when it changed.
   let topsBusy = false;
   async function sendTops() {
     const top = DATA.sellers.slice(0, 100).map(s => s.id);
@@ -622,7 +622,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     try {
       polledAt = Date.now();
       const j = await getJSON('/api/status?since=' + since);
-      if (j._status !== 200 || !Array.isArray(j.rows)) { // an error reply (e.g. the daily database limit), not a status update
+      if (j._status !== 200 || !Array.isArray(j.rows)) { // an error reply (e.g. a database limit), not a status update
         siteErr = typeof j.error === 'string' ? j.error : 'The site answered HTTP ' + j._status;
         renderStatus(); return;
       }
@@ -641,7 +641,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     } catch (e) { offline = true; renderStatus(); }
   }
 
-  // Every 8 s while you use the page; once a minute after 10 minutes without a tap, scroll or key (saves the site's daily allowance).
+  // Every 5 s while you use the page; once a minute after 10 minutes without a tap, scroll or key (no need to poll an idle page).
   let activeAt = Date.now(), polledAt = 0;
   ['pointerdown', 'keydown', 'scroll', 'focus'].forEach(t => window.addEventListener(t, () => { const idle = Date.now() - activeAt > 600000; activeAt = Date.now(); if (idle && token) poll(); }, { passive: true, capture: true }));
 
@@ -973,7 +973,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     if (location.hash === '#settings') { history.replaceState({ gc: 'settings' }, '', '#settings'); showSettings(true); }
     if (started) return;
     started = true;
-    setInterval(() => { if (!document.hidden && token && (Date.now() - activeAt < 600000 || Date.now() - polledAt > 60000)) poll(); }, 8000);
+    setInterval(() => { if (!document.hidden && token && (Date.now() - activeAt < 600000 || Date.now() - polledAt > 60000)) poll(); }, 5000);
     setInterval(refreshGlow, 20000);
     setInterval(() => { if (!document.hidden && token) renderStatus(); }, 5000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden && token) poll(); });

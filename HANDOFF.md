@@ -56,25 +56,28 @@ Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each p
 - Trust: a player could report a false open/closed for their own sellers; the next honest check by anyone corrects it.
 - Cron (hourly, `17 * * * *`): schema upgrades and dropping sign-ins older than 180 days. No Torn calls.
 
-## Free plan daily limits (why the 500s happened)
-D1 free: 100,000 rows written and 5,000,000 rows read per day (reset 00:00 UTC). Every index adds one written row per write.
-History: on 2026-11-13 the old cron (rewriting every checked seller) used ~155,000 writes a day, and then a newcomer with 26,174
-purchases needed ~100,000 writes for their first sync; both made sign-ins and uploads fail with HTTP 500 until midnight UTC.
-Schema v4 (migrated automatically, all or nothing) keeps the free plan workable for many players:
+## Database limits (Workers Paid since 2026-11-13)
+Workers Paid includes 25 billion rows read and 50 million rows written a month (then $0.001 per million reads, $1 per million writes),
+30 s CPU per request, and no daily reset. Every index adds one written row per write.
+History: on the free plan (100,000 writes / 5,000,000 reads a day) the old minute cron used ~155,000 writes a day, and a newcomer with
+26,174 purchases needed ~100,000 writes for their first sync; both caused HTTP 500s until midnight UTC. Schema v4/v5 keep writes low anyway:
 - **Purchases in bundles** (`pbatches`: one row per upload of up to 1,000-2,000). Measured: that newcomer's first sync is
-  ~12,100 rows written (almost all of it the ~3 rows per brand-new seller in `status`), was ~100,000. A re-sent purchase is
+  ~12,100 rows written (almost all of it the ~2 rows per brand-new seller in `status`), was ~100,000. A re-sent purchase is
   stored again but counted once by the page (same log id).
-- **Seller list per player as one row** (`usets`, merged in SQL on each upload). Privacy filter for polls and Check now.
+- **Seller list per player as one row** (`usets`, merged in SQL on each upload). Privacy filter for polls and bazaar results.
 - **Top 100 worked out by the page** (`POST /api/tops`, only the differences are written; `tops` table). No server ranking.
-- **Bazaar checks** (now by the userscripts): a seller's row written only when its answer changed, a name found with the first
+- **Bazaar checks** (by the userscripts): a seller's row written only when its answer changed, a name found with the first
   check goes in the same row write. v5 dropped the old cron's indexes (`status_kind`, `tops_seller`), one written row less per change.
-- **New players start at 90 days** of history (existing players keep their setting).
-- **Per player per day**: 500 uploads, 60,000 purchases, 8,000 new sellers, 40 top-100 updates (HTTP 429 with a message; the
-  userscript keeps the rest and sends it after midnight UTC).
+- **New players start with all their history** (`NEW_USER_LOOKBACK = 0`; it was 90 days on the free plan, and players who joined
+  then keep 90 until they pick "All" in Settings).
+- **Per player per day** (UTC), as a cost guard: 2,000 uploads, 300,000 purchases, 40,000 new sellers, 200 top-100 updates,
+  20,000 bazaar changes, 5 item lists. Worst case about 150,000 written rows for one player in a day. Over a cap: HTTP 429 with a
+  message; the userscript keeps the rest and sends it later.
 - Reads measured (player with 4,000 sellers / 26,174 purchases): status poll 4 rows (changed rows via `status_u`, then the
   player's own kept in the Worker; doing it the other way read 12,000), first poll ~8,000, full data ~60 (bundles), only-new data
   a few rows; `/api/me` 1 row.
 - Errors come back as `{error}` text (a database-limit error says so) and are logged (`[observability]` in wrangler.toml).
+- The page polls `/api/status` every 5 s while in use (once a minute after 10 idle minutes).
 
 ## Tested locally
 `wrangler dev --local --test-scheduled` with a mock Torn (`TORN_BASE` var) and two players: sign in (good, wrong and badly shaped keys), uploads, data kept apart, no-bazaar sellers hidden, delete my data, sign out.
