@@ -59,16 +59,16 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
   eq('unknown shape -> null', L.parseBazaar({ bazaar: [] }), null);
   eq('name from profile', L.parseName({ profile: { id: 1, name: 'Duke' } }), 'Duke');
 
-  const now = 100000;
-  const due = L.pickDue([
-    { id: 1, t: now - 200, tier: 1 },    // 200/300 -> not due
-    { id: 2, t: now - 600, tier: 1 },    // 2.0
-    { id: 3, t: now - 2800, tier: 2 },   // 1.04
-    { id: 4, t: 0, tier: 2 },            // never checked: most overdue
-    { id: 5, t: now - 900, tier: 2 }     // 0.33 -> not due
-  ], now, 36);
-  eq('pickDue order and filter', due, [4, 2, 3]);
-  eq('pickDue respects max', L.pickDue([{ id: 1, t: 0, tier: 1 }, { id: 2, t: 0, tier: 1 }], now, 1).length, 1);
+  // round robin: carry on after the last one, then wrap to the start
+  const R = ids => ids.map(id => ({ id }));
+  eq('round robin carries on', L.roundRobin(R([5, 6, 7]), R([1, 2, 3]), 3).map(r => r.id), [5, 6, 7]);
+  eq('round robin wraps to the start', L.roundRobin(R([7]), R([1, 2, 7]), 3).map(r => r.id), [7, 1, 2]);
+  eq('round robin never repeats in one run', L.roundRobin(R([]), R([1, 2]), 5).map(r => r.id), [1, 2]);
+  // only changed sellers are written
+  eq('first check is a change', L.statusChanged({ is_open: null, has_bazaar: null, missing: 0 }, 1, 1, 0), true);
+  eq('same answer is not a change', L.statusChanged({ is_open: 1, has_bazaar: 1, missing: 0 }, 1, 1, 0), false);
+  eq('closed -> open is a change', L.statusChanged({ is_open: 0, has_bazaar: 1, missing: 0 }, 1, 1, 0), true);
+  eq('bazaar gone is a change', L.statusChanged({ is_open: 0, has_bazaar: 1, missing: 0 }, 0, 0, 0), true);
 
   eq('validIds ok', L.validIds(['12', 34, '12']), [12, 34]);
   eq('validIds rejects non digits', L.validIds(['12; DROP']), null);
@@ -84,8 +84,6 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
   eq('bearer garbage', L.bearer('Basic abc'), null);
   eq('key shape', [L.looksLikeKey('AbCdEfGh12345678'), L.looksLikeKey('short'), L.looksLikeKey('AbCdEfGh1234567!')], [true, false, false]);
   eq('check kinds: top, other, no bazaar, gone', [L.kindOf(0, 1, 1), L.kindOf(0, null, 0), L.kindOf(0, 0, 1), L.kindOf(1, 1, 1)], [1, 2, 3, 0]);
-  eq('no-bazaar sellers re-checked daily', L.pickDue([{ id: 9, t: 1000, tier: 3 }], 1000 + 86400, 5), [9]);
-  eq('no-bazaar sellers not before a day', L.pickDue([{ id: 9, t: 1000, tier: 3 }], 1000 + 3600, 5), []);
 
   console.log(fail ? `\n${fail} FAILED` : '\nAll passed');
   process.exit(fail ? 1 : 0);

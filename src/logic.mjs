@@ -2,9 +2,8 @@
 // Totals per seller are worked out in the browser (public/aggregate.js), not here.
 
 export const TOP_TIER = 100;             // top 100 sellers are checked more often
-// Check kinds: 1 = in someone's top 100 (about every 5 min), 2 = other sellers (about every 45 min),
-// 3 = had no bazaar last time (once a day, in case they open one), 0 = account not found (never).
-export const TARGET = { 1: 300, 2: 2700, 3: 86400 };
+// Check kinds: 1 = in someone's top 100, 2 = other sellers, 3 = had no bazaar last time (re-checked slowly, in case they
+// open one), 0 = account not found (never). Each run checks a few of each kind in turn (PER_RUN in worker.js).
 export const kindOf = (missing, hasBazaar, top) => (missing ? 0 : hasBazaar === 0 ? 3 : top ? 1 : 2);
 export const MAX_TORN_PER_RUN = 36;
 export const PARALLEL = 10;
@@ -26,14 +25,17 @@ export function parseName(j) {
   return typeof p.name === 'string' && p.name ? p.name : null;
 }
 
-// candidates: [{id, t, tier}] -> the most overdue ids (age / target interval >= 1), most overdue first.
-export function pickDue(candidates, now, max) {
-  return candidates
-    .map(c => ({ id: c.id, score: (now - (c.t || 0)) / (TARGET[c.tier] || TARGET[2]) }))
-    .filter(c => c.score >= 1)
-    .sort((a, b) => b.score - a.score || a.id - b.id)
-    .slice(0, max)
-    .map(c => c.id);
+// Round robin: the next rows after where the last run stopped (`after`), topped up from the start of the list
+// (`fromStart`) when the end is reached. Each seller is checked in turn without storing a time per seller.
+export function roundRobin(after, fromStart, n) {
+  const out = after.slice(0, n), seen = new Set(out.map(r => r.id));
+  for (const r of fromStart) { if (out.length >= n) break; if (!seen.has(r.id)) { out.push(r); seen.add(r.id); } }
+  return out;
+}
+// Did a bazaar check find something new? Only then is the seller's row written (database writes are the scarce thing).
+export function statusChanged(old, is_open, has_bazaar, missing) {
+  if (!old) return true;
+  return old.is_open !== is_open || old.has_bazaar !== has_bazaar || (old.missing || 0) !== missing;
 }
 
 // Check now: only digit ids, at most 30, no repeats.

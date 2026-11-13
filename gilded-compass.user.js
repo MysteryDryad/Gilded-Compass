@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.4.1
+// @version      0.4.2
 // @description  Ranks the Torn bazaar sellers you buy from. Sends your bazaar purchases to the Gilded Compass site and adds a 🧭 button that opens it. Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -42,7 +42,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.4.1'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.4.2'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -261,14 +261,20 @@
     save();
     return { added, sellers: [...sellers], newest, from };
   }
-  async function sendToSite() {
+  // final = the end of a sync: the site then re-ranks your top sellers (it skips that for in-between chunks to save work).
+  async function sendToSite(final) {
     const ids = Object.keys(state.pending);
-    for (let i = 0; i < ids.length; i += CHUNK) {
+    if (!ids.length && final !== true) return;
+    for (let i = 0; i < Math.max(ids.length, 1); i += CHUNK) {
       const chunk = ids.slice(i, i + CHUNK);
       const body = { buys: chunk.map(id => state.pending[id]) };
+      if (final === true && i + CHUNK >= ids.length) body.final = true;
       let r = await siteCall('POST', '/api/purchases', body, await token());
       if (r.status === 401) { sset('token', ''); r = await siteCall('POST', '/api/purchases', body, await signIn()); }
-      if (r.status !== 200) throw new Error('The site answered HTTP ' + r.status + ' ' + String(r.text || '').slice(0, 120));
+      if (r.status !== 200) {
+        let msg = ''; try { msg = JSON.parse(r.text).error || ''; } catch (e) { msg = String(r.text || '').slice(0, 120); }
+        throw new Error('The site answered HTTP ' + r.status + (msg ? ': ' + msg : ''));
+      }
       chunk.forEach(id => delete state.pending[id]);
       state.sent += chunk.length;
       save();
@@ -314,7 +320,7 @@
           state.oldest = start;
         }
       }
-      if (Object.keys(state.pending).length) await sendToSite();
+      if (Object.keys(state.pending).length || added) await sendToSite(true);
       state.lastError = null; state.syncedAt = Date.now(); save(); shareSync(); setStatus('');
       setBtn('ok', added ? `Sent ${added} new purchase${added === 1 ? '' : 's'}` : 'Up to date');
       return { added, sellers: [...new Set(sellers)] };

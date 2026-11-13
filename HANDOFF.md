@@ -38,10 +38,23 @@ Reading logs needs a **Custom key with log ticked** (or Full). Public and Limite
 Signing in to the site works with any key, Public included (only `user/basic` is used).
 
 ## Cron (every minute)
-One D1 read batch, then up to 36 Torn calls with the site key, 10 in parallel: Torn item list weekly, up to 12 name lookups while names are missing, then the most overdue bazaar checks.
-`status.kind`: 1 = in someone's top 100 (about every 5 min), 2 = others (about every 45 min), 3 = no bazaar (daily), 0 = account gone (never). Score = age / target.
-Then one D1 write batch: 38 subrequests (free limit 50). A bad site key is stored in `meta.error` and shown on the page. Expired sessions are cleaned hourly.
-With many users the 36 calls a minute are shared, so checks just get less frequent (most overdue first).
+Round robin: each run checks the next sellers of each kind after where the last run stopped (cursors and the time of the run
+in one `meta` row, `rr`), wrapping to the start. `status.kind`: 1 = in someone's top 100 (14 per run), 3 = no bazaar (2 per run),
+2 = everyone else (the rest of the 36 Torn calls), 0 = account gone (never). Names come along the first time a seller is checked.
+**A seller's row is only written when the answer changed** (`statusChanged`); `status.t` = when the last change was seen.
+Subrequests: 2 D1 reads + at most 36 Torn calls + 1 D1 write (+1 read per Worker start for the schema check) - free limit 50.
+A bad site key is stored in `meta.error` and shown on the page. Expired sessions are cleaned hourly.
+Each run logs `cron: checked N, changed N, names N, rows written N` (Worker > Observability > Logs).
+
+## Free plan daily limits (why the 500s happened)
+D1 free: 100,000 rows written and 5,000,000 rows read per day (reset 00:00 UTC). Every index adds one written row per write.
+Until 2026-11-13 the cron rewrote every checked seller (36 a minute x 3 rows = about 155,000 rows a day), so the write allowance
+ran out each day and anything writing (sign-in, uploads) failed with HTTP 500 until midnight UTC.
+Now: about 1 row a minute plus real open/close changes (measured: 36 checks, 0 changes = 1 row written). Also:
+`/api/me` uses EXISTS (1 row read, not a count), the top-100 ranking runs on the first upload, at the end of a sync (`final`)
+or at most every 6 hours, the page fetches only new purchases (`/api/data?after=`), and it polls once a minute after 10 idle minutes.
+Errors now come back as `{error}` text (a database-limit error says so) and are logged (`[observability]` in wrangler.toml).
+Schema version 2 (`meta.schemaV`): indexes `status_kind(kind)` and `status_t(t)`; the old `status_kind_t` and `status_name` are dropped.
 
 ## Tested locally
 `wrangler dev --local --test-scheduled` with a mock Torn (`TORN_BASE` var) and two players: sign in (good, wrong and badly shaped keys), uploads, data kept apart, no-bazaar sellers hidden and moved to daily checks, check-now limits, delete my data, sign out.

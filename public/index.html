@@ -383,6 +383,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
 
   const EMPTY = { sellers: [], purchases: 0, first: 0, last: 0, lastUpload: 0 };
   let RAW = [], ITEMS = {}, SETTINGS = { lookback: 0 }, ME = null; // as sent by the site; the list is worked out from these
+  let LAST = 0; // the last purchase row this page has, so later fetches bring only new ones
   let DATA = EMPTY;
   const STATUS = new Map(); // id -> { o, b, m, t, name, nt }
   let since = 0, skew = 0, cronAt = 0, lastUpload = 0, statusErr = null, offline = false;
@@ -409,7 +410,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   const SEAL = { open: 'Open', closed: 'Closed', unchecked: 'Checking' };
   function seal(id) {
     const b = baz(id), s = STATUS.get(id);
-    const tip = s && s.t ? 'Checked ' + ago(s.t) + ' (a snapshot, press Check now for a fresh one)' : 'Not checked yet: the first check happens within a few minutes';
+    const tip = s && s.t ? 'Last change seen ' + ago(s.t) + '. Sellers are checked in turn all day; press Check now for a fresh look.' : 'Not checked yet: the first check happens soon';
     return `<span class="seal ${b}" title="${esc(tip)}"><i></i>${SEAL[b] || ''}</span>`;
   }
   function visitedAt(id) { return visits[id] || 0; }
@@ -527,12 +528,12 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   }
   function renderStatus() {
     const ids = DATA.sellers.map(s => s.id).filter(id => baz(id) !== 'none');
-    let checked = 0, newest = 0;
-    for (const id of ids) { const s = STATUS.get(id); if (s && s.t) { checked++; if (s.t > newest) newest = s.t; } }
+    let checked = 0;
+    for (const id of ids) { const s = STATUS.get(id); if (s && s.t) checked++; }
     const stale = !cronAt || serverNow() - cronAt > 300;
     $('statusline').classList.toggle('stale', stale || offline);
     $('statustext').textContent = offline ? 'Offline, retrying…'
-      : `Live · ${fmt(checked)} of ${fmt(ids.length)} checked` + (newest ? ` · newest ${ago(newest)}` : '');
+      : `Live · ${fmt(checked)} of ${fmt(ids.length)} checked` + (cronAt ? ` · last check ${ago(cronAt)}` : '');
     const n = [];
     if (statusErr) n.push(`Bazaar checks are paused: ${statusErr.msg}. (Site owner: check the TORN_API_KEY secret.)`);
     if (!offline && stale && ids.length) n.push(cronAt ? `No bazaar check has run for ${Math.round((serverNow() - cronAt) / 60)} minutes.` : 'No bazaar check has run yet.');
@@ -572,11 +573,14 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     if (!r.ok && !j.error) throw new Error('HTTP ' + r.status);
     return Object.assign(j, { _status: r.status });
   }
-  async function loadData() {
-    const d = await getJSON('/api/data');
+  // more = true: only purchases added since the last fetch (cheap for the site's free database allowance).
+  async function loadData(more) {
+    const d = await getJSON('/api/data' + (more && LAST ? '?after=' + LAST : ''));
     ME = d.me || null;
     if (ME) { const who = `<b>${esc(ME.name || 'player')}</b> [${ME.uid}]`; $('whoName').innerHTML = who; $('svWho').innerHTML = who; }
-    RAW = d.purchases || []; ITEMS = d.items || {}; SETTINGS = Object.assign({ lookback: 0 }, d.settings);
+    RAW = more && LAST ? RAW.concat(d.purchases || []) : (d.purchases || []);
+    LAST = Number(d.last) || LAST;
+    ITEMS = d.items || {}; SETTINGS = Object.assign({ lookback: 0 }, d.settings);
     skew = d.now - Date.now() / 1000;
     build(d.lastUpload || 0);
   }
@@ -594,6 +598,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   const LOOKBACK_LABEL = { 30: '30 days', 90: '90 days', 180: '6 months', 365: 'year', 0: 'all' };
   async function poll() {
     try {
+      polledAt = Date.now();
       const j = await getJSON('/api/status?since=' + since);
       offline = false; skew = j.now - Date.now() / 1000; cronAt = j.cronAt; statusErr = j.error;
       const changed = [];
@@ -603,10 +608,14 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
         STATUS.set(id, { o, b, m, t, name, nt });
         since = Math.max(since, t || 0, nt || 0);
       }
-      if (j.lastUpload && j.lastUpload !== lastUpload) { await loadData(); render(); return; }
+      if (j.lastUpload && j.lastUpload !== lastUpload) { await loadData(true); render(); return; }
       if (changed.length) patchCards(changed); else renderStatus();
     } catch (e) { offline = true; renderStatus(); }
   }
+
+  // Every 8 s while you use the page; once a minute after 10 minutes without a tap, scroll or key (saves the site's daily allowance).
+  let activeAt = Date.now(), polledAt = 0;
+  ['pointerdown', 'keydown', 'scroll', 'focus'].forEach(t => window.addEventListener(t, () => { const idle = Date.now() - activeAt > 600000; activeAt = Date.now(); if (idle && token) poll(); }, { passive: true, capture: true }));
 
   /* ---------- check now: the bazaars on screen (sellers you bought from) ---------- */
   function idsOnScreen() {
@@ -846,7 +855,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     if (location.hash === '#settings') { history.replaceState({ gc: 'settings' }, '', '#settings'); showSettings(true); }
     if (started) return;
     started = true;
-    setInterval(() => { if (!document.hidden && token) poll(); }, 8000);
+    setInterval(() => { if (!document.hidden && token && (Date.now() - activeAt < 600000 || Date.now() - polledAt > 60000)) poll(); }, 8000);
     setInterval(refreshGlow, 20000);
     setInterval(() => { if (!document.hidden && token) renderStatus(); }, 5000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden && token) poll(); });

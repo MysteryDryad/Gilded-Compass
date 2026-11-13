@@ -18,6 +18,10 @@ binding = "DB"
 database_name = "gilded-compass"
 database_id = "38424d54-39f3-4386-a762-cfed0fbc861b"
 
+# Keep the Worker's logs (errors, and one line per bazaar-check run) in the dashboard: Worker > Observability.
+[observability]
+enabled = true
+
 # Check bazaars every minute.
 [triggers]
 crons = ["* * * * *"]
