@@ -45,6 +45,17 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
   eq('$1 pseudo type (not double counted in tot)', s55.t[G.ONE], [1, 3, 3]);
   eq('two types in one purchase count once each', [A.sellers[2].tot[0], A.sellers[2].t.Plushie[0], A.sellers[2].t.Flower[0]], [1, 1, 1]);
   eq('date range and count', [A.first, A.last, A.count], [50, 300, 4]);
+  {
+    const it = { 1: ['Teddy', 'Plushie'], 2: ['Rose', 'Flower'], 3: ['Beer', 'Alcohol'] };
+    const P = [[1, 7, [[1, 2], [2, 1]], 100, null], [2, 7, [[3, 4]], 50, null], [3, 8, [[2, 5]], 1, null], [4, 9, [[3, 1]], 300, null]];
+    const by = G.forTypes(P, it, ['Plushie', 'Flower']);
+    eq('several types: a purchase with both counts once', by.get(7), [1, 3, 300]);
+    eq('several types: only the picked items count', by.get(8), [1, 5, 5]);
+    eq('several types: other sellers left out', by.has(9), false);
+    eq('$1 items with a type: the $1 purchase counts once', G.forTypes(P, it, ['$1 items', 'Flower']).get(8), [1, 5, 5]);
+    const A1 = G.aggregate(P, it).sellers.find(s => s.id === 7);
+    eq('one type matches the overall totals', G.forTypes(P, it, ['Alcohol']).get(7), A1.t.Alcohol);
+  }
   eq('unknown item type', Object.keys(G.aggregate([[1, 1, [[999, 1]], 5, null]], items).sellers[0].t), ['Unknown']);
   { // speed: a big history like the reference (23k purchases, ~5k sellers) adds up quickly in a browser
     const big = []; for (let i = 0; i < 23094; i++) big.push([1780000000 + i, 1000 + (i % 4944), [[i % 2 ? 186 : 260, 1 + (i % 5)]], i % 9 ? 1500 : 1, null]);

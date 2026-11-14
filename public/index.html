@@ -99,6 +99,7 @@ header.brand { padding: 20px 0 10px; display: flex; align-items: center; gap: 14
 .bearings b { color: var(--text); font-size: 17px; font-weight: 700; margin-right: 5px; font-variant-numeric: tabular-nums; }
 .bearings .g b { color: var(--gold); }
 .controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-bottom: 10px; }
+.chipsHint { margin-bottom: 6px; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--card); }
 .seg button { border: 0; background: none; padding: 6px 12px; cursor: pointer; font-size: 13px; }
 .seg button[aria-pressed="true"] { background: var(--gold); color: var(--on-gold); font-weight: 600; }
@@ -270,6 +271,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     <section id="filters">
       <div class="bearings" id="bearings"></div>
       <div id="sortRow"><span class="lbl">Sort</span><select id="sort2" aria-label="Sort sellers"></select></div>
+      <div class="lbl chipsHint">Item types: tap several to combine them</div>
       <div class="chips" id="chips"></div>
       <div class="controls">
         <span class="seg" role="group" aria-label="Bazaar">
@@ -278,6 +280,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
         <span class="seg" role="group" aria-label="Visits">
           <button data-visit="any" aria-pressed="true">Any visit</button><button data-visit="yes" aria-pressed="false">Visited</button><button data-visit="no" aria-pressed="false">Not visited</button>
         </span>
+        <button class="btn small" id="clearFilters" hidden>Clear all filters</button>
       </div>
     </section>
 
@@ -386,7 +389,15 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   let DATA = EMPTY;
   const STATUS = new Map(); // id -> { o, b, m, t, name, nt }
   let since = 0, skew = 0, lastUpload = 0, offline = false, siteErr = null; // siteErr: the site answered with an error
-  const st = { q: '', chip: null, baz: 'any', visit: 'any', sort: ls.get('sort', 'rank'), shown: PAGE };
+  const st = { q: '', chips: new Set(), baz: 'any', visit: 'any', sort: ls.get('sort', 'rank'), shown: PAGE }; // chips: item types picked (none = everything)
+  let INRANGE = [], PICKED = null; // purchases inside the 60 days; totals for the picked item types ({ key, by })
+  // Totals per seller for the picked item types (worked out again only when the pick or the data changes).
+  function picked() {
+    const key = [...st.chips].sort().join('|');
+    if (!PICKED || PICKED.key !== key) PICKED = { key, by: GCAgg.forTypes(INRANGE, ITEMS, st.chips) };
+    return PICKED.by;
+  }
+  const chipLabel = () => [...st.chips].join(' + ');
   let list = [], hiddenNoBazaar = 0;
   let token = ls.get('token', null), started = false;
   let busyUntil = 0, renderTimer = null;
@@ -422,9 +433,10 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const q = st.q.trim().toLowerCase();
     let out = [];
     hiddenNoBazaar = 0;
+    const pickedBy = st.chips.size ? picked() : null;
     for (const s of DATA.sellers) {
       if (baz(s.id) === 'none') { hiddenNoBazaar++; continue; } // no bazaar (or account gone): not shown
-      const v = st.chip ? s.t[st.chip] : s.tot;
+      const v = st.chips.size ? pickedBy.get(s.id) : s.tot; // any of the picked item types
       if (v) out.push({ s, v });
     }
     out.sort((a, b) => b.v[0] - a.v[0] || b.v[1] - a.v[1] || a.s.id - b.s.id);
@@ -459,11 +471,11 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function cardHtml(x, maxP) {
     const id = x.s.id, nm = nameOf(id), note = notes[id], v = visitedAt(id), pin = pinned(id), none = !x.v[0];
     const types = topTypes(x.s, 3).map(([t, c]) => `<span title="${esc(t)}"><span class="ic">${icon(t)}</span><b>${fmt(c[1])}</b></span>`).join('');
-    const ones = x.s.t[ONE] && !st.chip ? `<span title="$1 items"><span class="ic">${icon(ONE)}</span><b>${fmt(x.s.t[ONE][1])}</b></span>` : '';
+    const ones = x.s.t[ONE] && !st.chips.size ? `<span title="$1 items"><span class="ic">${icon(ONE)}</span><b>${fmt(x.s.t[ONE][1])}</b></span>` : '';
     const why = pin && (note || (KEEPS.get(id) || {}).note) ? 'it is pinned and has a note' : pin ? 'it is pinned' : 'it has a note';
     return `<article class="cardx${glowing(id) ? ' hl' : ''}${pin ? ' pinned' : ''}" data-id="${id}">
       <div class="ct">
-        <span class="rank" title="Rank by purchases${st.chip ? ' (' + esc(st.chip) + ')' : ''}">${none ? '–' : x.rank}</span>${pin ? '<span class="pinmark" title="Pinned: always on your list">📌</span>' : ''}
+        <span class="rank" title="Rank by purchases${st.chips.size ? ' (' + esc(chipLabel()) + ')' : ''}">${none ? '–' : x.rank}</span>${pin ? '<span class="pinmark" title="Pinned: always on your list">📌</span>' : ''}
         <div class="whois"><a class="sl nm${nm ? '' : ' unk'}" href="${bazaar(id)}" target="_blank" rel="noopener noreferrer" title="Open their bazaar">${nm ? esc(nm) : 'Player ' + id}</a><a class="sl sid" href="${profile(id)}" target="_blank" rel="noopener noreferrer" title="Open their profile">[${id}]</a></div>
         ${seal(id)}
       </div>
@@ -520,12 +532,13 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     for (const sl of DATA.sellers) { if (baz(sl.id) === 'none') continue; for (const k in sl.t) tt[k] = (tt[k] || 0) + sl.t[k][1]; }
     const types = Object.keys(tt).filter(t => t !== ONE).sort((a, b) => tt[b] - tt[a]);
     if (tt[ONE]) types.push(ONE);
-    const chip = (val, label, ic, n) => `<button class="chip" data-chip="${esc(val)}" aria-pressed="${(st.chip || '') === val}"><span class="ic">${ic}</span>${esc(label)}${n != null ? `<b>${fmt(n)}</b>` : ''}</button>`;
+    const chip = (val, label, ic, n) => `<button class="chip" data-chip="${esc(val)}" aria-pressed="${val ? st.chips.has(val) : !st.chips.size}"><span class="ic">${ic}</span>${esc(label)}${n != null ? `<b>${fmt(n)}</b>` : ''}</button>`;
     $('chips').innerHTML = chip('', 'Everything', '🧭', null) + types.map(t => chip(t, t, icon(t), tt[t])).join('');
   }
   function renderFilterCount() {
-    const n = (st.chip ? 1 : 0) + (st.baz !== 'any' ? 1 : 0) + (st.visit !== 'any' ? 1 : 0);
+    const n = st.chips.size + (st.baz !== 'any' ? 1 : 0) + (st.visit !== 'any' ? 1 : 0);
     $('filtersBtn').textContent = n ? `Filters (${n})` : 'Filters';
+    $('clearFilters').hidden = !n;
   }
   function renderStatus() {
     const ids = DATA.sellers.map(s => s.id).filter(id => baz(id) !== 'none');
@@ -614,7 +627,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function build(up) {
     const days = Number(SETTINGS.lookback) || 0;
     const start = days ? serverNow() - days * 86400 : 0;
-    const A = GCAgg.aggregate(start ? RAW.filter(p => p[0] >= start) : RAW, ITEMS);
+    INRANGE = start ? RAW.filter(p => p[0] >= start) : RAW; PICKED = null;
+    const A = GCAgg.aggregate(INRANGE, ITEMS);
     const have = new Set(A.sellers.map(x => x.id)); // pinned or noted sellers with no buys in the 60 days still get a card
     for (const id of KEEPS.keys()) if (!have.has(id)) A.sellers.push({ id, last: 0, tot: [0, 0, 0], t: {}, kept: true });
     DATA = { sellers: A.sellers, purchases: A.count, first: A.first, last: A.last, lastUpload: up };
@@ -786,10 +800,17 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     st.visit = b.dataset.visit; st.shown = PAGE;
     document.querySelectorAll('[data-visit]').forEach(x => x.setAttribute('aria-pressed', x === b)); render();
   }));
+  $('clearFilters').addEventListener('click', () => {
+    st.chips.clear(); st.baz = 'any'; st.visit = 'any'; st.shown = PAGE;
+    document.querySelectorAll('[data-baz]').forEach(x => x.setAttribute('aria-pressed', x.dataset.baz === 'any'));
+    document.querySelectorAll('[data-visit]').forEach(x => x.setAttribute('aria-pressed', x.dataset.visit === 'any'));
+    render();
+  });
   $('chips').addEventListener('click', e => {
     const c = e.target.closest('[data-chip]'); if (!c) return;
-    const v = c.dataset.chip || null;
-    st.chip = st.chip === v ? null : v; st.shown = PAGE; render();
+    const v = c.dataset.chip;
+    if (!v) st.chips.clear(); else if (st.chips.has(v)) st.chips.delete(v); else st.chips.add(v); // several types combine
+    st.shown = PAGE; render();
   });
   const phoneQ = window.matchMedia('(max-width: 700px)');
   const setPh = () => { $('q').placeholder = phoneQ.matches ? 'Search' : 'Search a seller, id or note  ( / )'; };

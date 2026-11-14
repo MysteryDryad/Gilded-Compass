@@ -46,10 +46,32 @@
     for (const s of sellers) { s.tot[2] = Math.round(s.tot[2]); for (const k in s.t) s.t[k][2] = Math.round(s.t[k][2]); }
     return { sellers, first, last, count: purchases.length };
   }
+  // Totals per seller for several item types at once (the page's item-type filter): a purchase counts once if any of its items
+  // is one of `types`; items and spent count only those items. "$1 items" in `types` takes every item of a $1-or-less purchase.
+  // Returns Map seller -> [purchases, items, spent].
+  function forTypes(purchases, itemTypes, types) {
+    const want = new Set(types), one = want.has(ONE), by = new Map();
+    for (const p of purchases) {
+      const items = p[2] || [], each = eachPrice(items, p[3], p[4]);
+      const cheap = one && each != null && each <= 1;
+      let hit = false, qty = 0, spent = 0;
+      for (const [itemId, q] of items) {
+        const type = (itemTypes && itemTypes[itemId] && itemTypes[itemId][1]) || 'Unknown';
+        if (cheap || want.has(type)) { hit = true; qty += Number(q); spent += each == null ? 0 : each * Number(q); }
+      }
+      if (!hit) continue;
+      const id = Number(p[1]);
+      const v = by.get(id) || [0, 0, 0];
+      v[0]++; v[1] += qty; v[2] += spent;
+      by.set(id, v);
+    }
+    for (const v of by.values()) v[2] = Math.round(v[2]);
+    return by;
+  }
   // Rank: purchases, then items, then lower id.
   function byRank(a, b) { return b.tot[0] - a.tot[0] || b.tot[1] - a.tot[1] || a.id - b.id; }
 
-  const api = { ONE, aggregate, eachPrice };
+  const api = { ONE, aggregate, forTypes, eachPrice };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.GCAgg = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
