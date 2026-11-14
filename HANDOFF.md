@@ -9,6 +9,9 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 - **60 days of history for everyone** (`HISTORY_DAYS` in `src/worker.js`, `HISTORY_DAYS` in the userscript). Purchases older than that
   are refused on upload and deleted daily; a seller not bought from in 60 days drops off the player's list (new sellers take their place)
   and comes back with the next purchase. No per-player choice.
+- **Pinned sellers and sellers with a note are never dropped** (`keeps` table: `pin`, `note` flags; only the fact that a note
+  exists is sent, the note text stays in the browser). Pinned sellers are shown first in every sort and in the "Open now" strip,
+  and pins show on every device. A kept seller with no buys in the 60 days still gets a card ("No buys in the last 60 days…").
 - Only **Bazaar buy** log entries are read (log types whose title starts with "Bazaar buy"), and each entry is checked again before it is kept.
 - Only sellers **with a bazaar** are shown. A seller found to have no bazaar (or a deleted account) is hidden (they come back if a later check finds a bazaar).
 - No site password. The userscript signs in with the player's own Torn key. The key is used for one Torn call (`user/basic`: who owns this key?) and is never stored. It gets a random token, and only its SHA-256 is kept (sessions last 180 days). The page gets that token from the userscript (`gc:token` / `gc:signin`) or from `#t=` when 🧭 opens it; the page has no key box.
@@ -31,7 +34,10 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 `POST /api/login {key}`, `POST /api/logout`, `GET /api/me`, `GET /api/data` (my raw purchases `[ts, seller, items, cost_each, cost_total]` plus Torn's item list, built as JSON by D1 in chunks of 20k rows; the page adds them up),
 `GET /api/status?since=` (my sellers' flags and names changed since), `POST /api/purchases {buys}` (idempotent by log id), `POST /api/tops`, `GET /api/settings` (`{lookback: 60}`, fixed; POST changes nothing), `POST /api/forget` (delete all my data),
 and for the userscript's checks: `GET /api/sellers` (my seller ids and my top 100), `POST /api/bazaar {results: [[id, is_open, has_bazaar, missing]], names: [[id, name, missing]]}`
-(at most 100 of each; only my own sellers; only changes are written; replies `{checked, changed, needName}`), `POST /api/items {items}` (Torn's item list, kept for me).
+(at most 100 of each; only my own sellers; only changes are written; replies `{checked, changed, needName}`), `POST /api/items {items}` (Torn's item list, kept for me),
+`POST /api/keep {items: [[seller, pin, note]]}` (0/1, null = unchanged; at most 200 per call and 1,000 kept sellers; only changes
+are written; a seller not on my list yet is added back to it, e.g. a note kept on a device for a seller dropped before pins existed;
+replies with the full `keeps` list, which `/api/data` also returns).
 Gone: `/api/check-now`, `/api/probe` (they used the site's own key).
 
 ## Keeping the free Worker light
@@ -73,8 +79,8 @@ History: on the free plan (100,000 writes / 5,000,000 reads a day) the old minut
   check goes in the same row write. v5 dropped the old cron's indexes (`status_kind`, `tops_seller`), one written row less per change.
 - **60 days for everyone** (schema v6): each bundle stores its newest purchase time (`pbatches.tmax`). Once a day (the hourly cron,
   first run of each UTC day, marker `meta.pruned`) the Worker deletes bundles whose newest purchase is older than 60 days, rebuilds each
-  player's `usets` from the purchases inside the 60 days (players with none are removed), and deletes `tops` and shared `status` rows of
-  sellers no longer in anyone's list. A bundle that straddles the line stays until its newest purchase is old (the page and seller lists
+  player's `usets` from the purchases inside the 60 days plus their `keeps` (players with neither are removed), and deletes `tops` and
+  shared `status` rows of sellers no longer in anyone's list. A bundle that straddles the line stays until its newest purchase is old (the page and seller lists
   only count purchases inside the 60 days). Logged as `prune: bundles N players N tops N sellers N`.
 - **Per player per day** (UTC), as a cost guard: 2,000 uploads, 300,000 purchases, 40,000 new sellers, 200 top-100 updates,
   20,000 bazaar changes, 5 item lists. Worst case about 150,000 written rows for one player in a day. Over a cap: HTTP 429 with a
@@ -90,7 +96,10 @@ History: on the free plan (100,000 writes / 5,000,000 reads a day) the old minut
 Playwright (0.5.0): gate without the userscript (and the userscript arriving late), setup with the new key link and bazaar test, opening from 🧭,
 the quick check on open (seals and names filled from the player's key), Check now (new seller first; a second press changes nothing),
 a fresh tab signed in through the userscript, sign out and back in, a key without `bazaar` (notice), results for someone else's sellers ignored, `/api/check-now` gone.
-Upgrade v4 → v5 tested on a database made by the old code (indexes dropped, sign-ins kept).
+Upgrade v4 → v5 tested on a database made by the old code (indexes dropped, sign-ins kept); v5 → v6 (60 days) and v6 → v7 (keeps) too.
+Pins (Playwright): a pin moves the card to the top and shows on another device; after every purchase is aged past 60 days and the
+cleanup runs, only the pinned and the noted seller stay (with their status rows); a note kept on the device for a seller that had
+already dropped off brings it back; an unpinned seller stays on screen until the next reload, then is gone.
 
 ## The page and the userscript
 - The userscript also runs on the Gilded Compass page (second `@match`), with no button there. It marks the page with

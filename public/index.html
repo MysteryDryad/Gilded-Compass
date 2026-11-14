@@ -145,8 +145,13 @@ select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); ba
 .meter i { display: block; height: 100%; background: linear-gradient(90deg, var(--gold2), var(--gold-hi)); }
 .cf { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); min-height: 20px; }
 .cardx.hl .visit { color: var(--gold); font-weight: 600; }
-.notebtn { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0; font-size: 12px; }
-.notebtn:hover { color: var(--gold); }
+.cfb { display: flex; gap: 14px; flex: 0 0 auto; }
+.notebtn, .pinbtn { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0; font-size: 12px; }
+.notebtn:hover, .pinbtn:hover { color: var(--gold); }
+.pinbtn[aria-pressed="true"] { color: var(--gold); font-weight: 600; }
+.pinmark { flex: 0 0 auto; font-size: 14px; margin-left: -4px; }
+.cardx.pinned { border-color: var(--gold2); }
+.kept { white-space: normal !important; font-style: italic; }
 .note { color: var(--gold); font-size: 13px; font-style: italic; overflow-wrap: anywhere; border-top: 1px dashed var(--line); padding-top: 6px; }
 .noteedit { width: 100%; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--gold); background: var(--bg); }
 .more { display: flex; justify-content: center; padding: 18px 0 28px; gap: 10px; color: var(--muted); align-items: center; flex-wrap: wrap; font-size: 12.5px; }
@@ -235,7 +240,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     <div class="gate-actions" id="gateActions"></div>
     <div id="loginMsg"></div>
     <table class="tos" aria-label="How your data and key are used">
-      <tr><th>Data storage</th><td>Your player id and name, and your bazaar purchases from the last 60 days (seller, items, price, time) sent by the 🧭 userscript. Older purchases are deleted automatically. Delete everything any time with "Delete my data".</td></tr>
+      <tr><th>Data storage</th><td>Your player id and name, your bazaar purchases from the last 60 days (seller, items, price, time) sent by the 🧭 userscript, and which sellers you pinned or wrote a note for (the note text stays on your device). Older purchases are deleted automatically. Delete everything any time with "Delete my data".</td></tr>
       <tr><th>Data sharing</th><td>Your purchases: none. Only you, signed in through your own key, can see them. The bazaar open/closed results and seller names your userscript looks up are public Torn information; the site keeps them and shares them with other players who buy from the same sellers.</td></tr>
       <tr><th>Purpose of use</th><td>Your personal directory of the bazaars you buy from, and which of them are open.</td></tr>
       <tr><th>Key storage &amp; sharing</th><td>The 🧭 userscript keeps your key on your device only and calls Torn with it directly. It is sent to this site once to confirm who you are, then forgotten: never stored here, never shared.</td></tr>
@@ -288,7 +293,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
         <h3>Purchase history</h3>
         <p>Your list covers your bazaar purchases from the <b>last 60 days</b> (the same for everyone, to keep the site quick).
           Older purchases are deleted, and a seller you haven't bought from in 60 days drops off; new sellers take their place.
-          Buy from them again and they come straight back, notes and all.</p>
+          Buy from them again and they come straight back.<br><b>📌 Pinned</b> sellers and sellers with a <b>note</b> are never dropped, and pinned ones are always shown first.</p>
       </div>
 
       <div class="sv-card">
@@ -375,6 +380,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   const EMPTY = { sellers: [], purchases: 0, first: 0, last: 0, lastUpload: 0 };
   let RAW = [], ITEMS = {}, SETTINGS = { lookback: 60 }, ME = null; // as sent by the site; the list is worked out from these
   let LAST = 0; // the last purchase bundle this page has, so later fetches bring only new ones
+  let KEEPS = new Map(); // id -> { pin, note }: pinned sellers and ones with a note (as the site knows it) stay on your list for good
+  const pinned = id => !!(KEEPS.get(id) || {}).pin;
   let SEEN = new Set(), TOPS = []; // purchase log ids already here (a purchase sent twice counts once); your top 100 as the site knows it
   let DATA = EMPTY;
   const STATUS = new Map(); // id -> { o, b, m, t, name, nt }
@@ -444,25 +451,26 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
       visit: (a, b) => visitedAt(b.s.id) - visitedAt(a.s.id) || a.rank - b.rank,
       name: (a, b) => (nameOf(a.s.id) || '￿' + a.s.id).localeCompare(nameOf(b.s.id) || '￿' + b.s.id) || a.rank - b.rank
     }[st.sort] || ((a, b) => a.rank - b.rank);
-    return out.sort(by);
+    return out.sort((a, b) => pinned(b.s.id) - pinned(a.s.id) || by(a, b)); // pinned sellers first, whatever the sort
   }
   function topTypes(s, n) {
     return Object.entries(s.t).filter(e => e[0] !== ONE).sort((a, b) => b[1][1] - a[1][1]).slice(0, n);
   }
   function cardHtml(x, maxP) {
-    const id = x.s.id, nm = nameOf(id), note = notes[id], v = visitedAt(id);
+    const id = x.s.id, nm = nameOf(id), note = notes[id], v = visitedAt(id), pin = pinned(id), none = !x.v[0];
     const types = topTypes(x.s, 3).map(([t, c]) => `<span title="${esc(t)}"><span class="ic">${icon(t)}</span><b>${fmt(c[1])}</b></span>`).join('');
     const ones = x.s.t[ONE] && !st.chip ? `<span title="$1 items"><span class="ic">${icon(ONE)}</span><b>${fmt(x.s.t[ONE][1])}</b></span>` : '';
-    return `<article class="cardx${glowing(id) ? ' hl' : ''}" data-id="${id}">
+    const why = pin && (note || (KEEPS.get(id) || {}).note) ? 'it is pinned and has a note' : pin ? 'it is pinned' : 'it has a note';
+    return `<article class="cardx${glowing(id) ? ' hl' : ''}${pin ? ' pinned' : ''}" data-id="${id}">
       <div class="ct">
-        <span class="rank" title="Rank by purchases${st.chip ? ' (' + esc(st.chip) + ')' : ''}">${x.rank}</span>
+        <span class="rank" title="Rank by purchases${st.chip ? ' (' + esc(st.chip) + ')' : ''}">${none ? '–' : x.rank}</span>${pin ? '<span class="pinmark" title="Pinned: always on your list">📌</span>' : ''}
         <div class="whois"><a class="sl nm${nm ? '' : ' unk'}" href="${bazaar(id)}" target="_blank" rel="noopener noreferrer" title="Open their bazaar">${nm ? esc(nm) : 'Player ' + id}</a><a class="sl sid" href="${profile(id)}" target="_blank" rel="noopener noreferrer" title="Open their profile">[${id}]</a></div>
         ${seal(id)}
       </div>
-      <div class="icons">${types}${ones}</div>
+      ${none ? `<div class="icons"><span class="kept">No buys in the last 60 days. Kept on your list because ${why}.</span></div>` : `<div class="icons">${types}${ones}</div>
       <div class="stats"><span><b>${fmt(x.v[0])}</b>buys</span><span><b>${fmt(x.v[1])}</b>items</span><span class="spent" title="$${fmt(x.v[2])}"><b>${money(x.v[2])}</b></span></div>
-      <div class="meter"><i style="width:${maxP ? Math.max(3, Math.round(100 * x.v[0] / maxP)) : 0}%"></i></div>
-      <div class="cf"><span class="visit">${v ? '✓ visited ' + agoMs(v) : ''}</span><button class="notebtn" data-note="${id}">${note ? '✎ edit note' : '✎ add note'}</button></div>
+      <div class="meter"><i style="width:${maxP ? Math.max(3, Math.round(100 * x.v[0] / maxP)) : 0}%"></i></div>`}
+      <div class="cf"><span class="visit">${v ? '✓ visited ' + agoMs(v) : ''}</span><span class="cfb"><button class="pinbtn" data-pin="${id}" aria-pressed="${pin}" title="${pin ? 'Unpin' : 'Pin: show first, and keep on your list for good'}">${pin ? '📌 Pinned' : '📌 Pin'}</button><button class="notebtn" data-note="${id}">${note ? '✎ edit note' : '✎ add note'}</button></span></div>
       ${note ? `<div class="note">${esc(note)}</div>` : ''}
     </article>`;
   }
@@ -491,12 +499,13 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   }
   // Your regulars (top 50 overall) whose bazaar is open right now.
   function renderStrip() {
-    const regs = DATA.sellers.filter(s => baz(s.id) !== 'none').slice(0, REGULARS);
+    const shown = DATA.sellers.filter(s => baz(s.id) !== 'none');
+    const regs = shown.filter(s => pinned(s.id)).concat(shown.filter(s => !pinned(s.id)).slice(0, REGULARS)); // pinned first
     const open = regs.filter(s => baz(s.id) === 'open');
     const waiting = regs.filter(s => baz(s.id) === 'unchecked').length;
     $('strip').innerHTML = open.length
       ? open.slice(0, 16).map(s => `<a class="reg sl${glowing(s.id) ? ' hl' : ''}" data-id="${s.id}" href="${bazaar(s.id)}" target="_blank" rel="noopener noreferrer" title="Open their bazaar">
-          <span class="seal open"><i></i></span><span class="rn">${esc(nameOf(s.id) || 'Player ' + s.id)}</span>
+          <span class="seal open"><i></i></span><span class="rn">${pinned(s.id) ? '📌 ' : ''}${esc(nameOf(s.id) || 'Player ' + s.id)}</span>
           <span class="ri">${topTypes(s, 2).map(([t]) => icon(t)).join('')}</span></a>`).join('')
       : `<span class="strip-empty">${!regs.length ? 'Your regulars appear here once purchases are synced.' : waiting ? 'Checking your regulars…' : 'None of your regulars are open right now. Press Check now for a fresh look.'}</span>`;
   }
@@ -583,6 +592,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     }
     LAST = Number(d.last) || LAST;
     TOPS = d.tops || TOPS;
+    if (Array.isArray(d.keeps)) KEEPS = new Map(d.keeps.map(([id, p, n]) => [id, { pin: p, note: n }]));
     ITEMS = d.items || {}; SETTINGS = Object.assign({ lookback: 60 }, d.settings);
     skew = d.now - Date.now() / 1000;
     build(d.lastUpload || 0);
@@ -605,6 +615,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const days = Number(SETTINGS.lookback) || 0;
     const start = days ? serverNow() - days * 86400 : 0;
     const A = GCAgg.aggregate(start ? RAW.filter(p => p[0] >= start) : RAW, ITEMS);
+    const have = new Set(A.sellers.map(x => x.id)); // pinned or noted sellers with no buys in the 60 days still get a card
+    for (const id of KEEPS.keys()) if (!have.has(id)) A.sellers.push({ id, last: 0, tot: [0, 0, 0], t: {}, kept: true });
     DATA = { sellers: A.sellers, purchases: A.count, first: A.first, last: A.last, lastUpload: up };
     lastUpload = up;
     const day = t => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -806,7 +818,41 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     refreshGlow();
   }
   ['rows', 'strip'].forEach(id => { $(id).addEventListener('click', markVisit); $(id).addEventListener('auxclick', markVisit); });
-  // Notes: edit in place on the card, saved in this browser.
+  // Pins: pinned sellers are shown first and stay on your list for good (saved on the site, so every device sees them).
+  async function keep(items) {
+    try {
+      const j = await getJSON('/api/keep', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) });
+      if (j.error || !Array.isArray(j.keeps)) throw new Error(j.error || 'HTTP ' + j._status);
+      KEEPS = new Map(j.keeps.map(([id, p, n]) => [id, { pin: p, note: n }]));
+      return j;
+    } catch (e) {
+      $('checkMsg').textContent = 'Could not save that pin or note on the site: ' + e.message;
+      setTimeout(() => { $('checkMsg').textContent = ''; }, 8000);
+      return null;
+    }
+  }
+  $('rows').addEventListener('click', async e => {
+    const b = e.target.closest('[data-pin]'); if (!b) return;
+    const id = Number(b.dataset.pin);
+    b.disabled = true;
+    await keep([[id, pinned(id) ? 0 : 1, null]]);
+    b.disabled = false;
+    render(); // pinned first (an unpinned seller with no buys in 60 days stays on screen until the next reload)
+  });
+  // Notes written on this device before pins existed: tell the site, so those sellers stay too (and come back if they dropped off).
+  async function syncNotes() {
+    const want = Object.keys(notes).map(Number).filter(id => id > 0 && notes[id] && !(KEEPS.get(id) || {}).note);
+    const back = [];
+    for (let i = 0; i < want.length; i += 200) {
+      const j = await keep(want.slice(i, i + 200).map(id => [id, null, 1]));
+      if (!j) return;
+      back.push(...(j.added || []));
+    }
+    if (!want.length) return;
+    build(lastUpload); render();
+    if (back.length && usCanCheck()) { await checkViaUserscript(back.slice(0, 40), 90000); poll(); } // sellers back on the list: check them now
+  }
+  // Notes: edit in place on the card, saved in this browser (the site only learns that the seller has one).
   $('rows').addEventListener('click', e => {
     const b = e.target.closest('[data-note]'); if (!b) return;
     const id = Number(b.dataset.note), card = b.closest('.cardx');
@@ -818,7 +864,9 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     let done = false;
     const finish = save => {
       if (done) return; done = true;
+      const had = !!notes[id];
       if (save) { const v = inp.value.trim(); if (v) notes[id] = v; else delete notes[id]; ls.set('notes', notes); }
+      if (had !== !!notes[id]) keep([[id, null, notes[id] ? 1 : 0]]); // a seller with a note stays on your list for good
       inp.remove();
       const n = notes[id];
       let div = card.querySelector('.note');
@@ -935,7 +983,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   });
   function signedOut(kind) {
     token = null; ls.set('token', null);
-    DATA = EMPTY; RAW = []; ME = null; LAST = 0; SEEN = new Set(); TOPS = []; STATUS.clear(); since = 0; autoChecked = false;
+    DATA = EMPTY; RAW = []; ME = null; LAST = 0; SEEN = new Set(); TOPS = []; KEEPS = new Map(); STATUS.clear(); since = 0; autoChecked = false;
     $('tagline').textContent = 'Every bazaar you buy from'; $('whoName').textContent = ''; $('svWho').textContent = ''; // nothing of the last person stays on screen
     $('rows').innerHTML = ''; $('strip').innerHTML = '';
     if (location.hash === '#settings') history.replaceState(null, '', location.pathname + location.search);
@@ -947,6 +995,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     await poll();
     render();
     autoCheck();
+    syncNotes();
     if (location.hash === '#settings') { history.replaceState({ gc: 'settings' }, '', '#settings'); showSettings(true); }
     if (started) return;
     started = true;

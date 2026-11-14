@@ -1,4 +1,4 @@
--- Gilded Compass database (Cloudflare D1), schema v6. The Worker creates these by itself on first use and upgrades
+-- Gilded Compass database (Cloudflare D1), schema v7. The Worker creates these by itself on first use and upgrades
 -- older databases automatically (see MIGRATIONS in src/worker.js); this file is a copy for reference.
 CREATE TABLE IF NOT EXISTS users (uid INTEGER PRIMARY KEY, name TEXT, created INTEGER NOT NULL, last_upload INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, uid INTEGER NOT NULL, created INTEGER NOT NULL);
@@ -15,4 +15,6 @@ CREATE TABLE IF NOT EXISTS tops (uid INTEGER NOT NULL, seller INTEGER NOT NULL, 
 -- u = when anything about it last changed. top and kind are left over from the old site cron (unused).
 CREATE TABLE IF NOT EXISTS status (id INTEGER PRIMARY KEY, is_open INTEGER, has_bazaar INTEGER, missing INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL DEFAULT 0, top INTEGER NOT NULL DEFAULT 0, kind INTEGER NOT NULL DEFAULT 2, name TEXT, name_t INTEGER NOT NULL DEFAULT 0, u INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS status_u ON status(u);
+-- sellers a player pinned or wrote a note for (only that a note exists; the text stays on their device): never dropped
+CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
