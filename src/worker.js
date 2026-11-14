@@ -24,9 +24,9 @@ const SCHEMA = [
   'CREATE INDEX IF NOT EXISTS status_u ON status(u)',
   'CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)',
   // per player and seller: pinned / has a note (only that a note exists; the text stays on their device) = never dropped;
-  // hide = removed by the player (never shown or checked again until they restore it)
+  // hide = when the player removed it (0 = not removed): off their list until they buy from it again or restore it
   'CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, hide INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID',
-  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '8')"
+  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '9')"
 ];
 const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owner jailed, inactive, too low, paused
 const SESSION_DAYS = 180;
@@ -36,7 +36,7 @@ const TOP_TIER = 100;
 // 150,000 written rows (a few cents), while a real first sync of a big history (26,000 purchases, 4,000 sellers) fits easily.
 const DAY_CAP = { purchases: 300000, sellers: 40000, uploads: 2000, tops: 200, changes: 20000, items: 5, keeps: 3000 };
 const KEEP_MAX = 3000; // pinned, noted or removed sellers per player
-const HIDDEN = '(SELECT seller FROM keeps WHERE uid = ?1 AND hide = 1)'; // the player's removed sellers (?1 = uid)
+const HIDDEN = '(SELECT seller FROM keeps WHERE uid = ?1 AND hide > 0)'; // the player's removed sellers (?1 = uid)
 // Everyone's list covers the last 60 days of bazaar purchases: older purchases are refused and deleted, and a seller not
 // bought from in 60 days drops off (new sellers take their place). Keeps the database small.
 const HISTORY_DAYS = 60;
@@ -64,7 +64,8 @@ async function withSchema(env, fn) {
 // v6: 60 days of history for everyone: each bundle knows its newest purchase (tmax) so old ones can be dropped; no per-player range.
 // v7: pinned sellers and sellers with a note (keeps) stay on the list for good.
 // v8: a player can remove a seller from their list (keeps.hide).
-const SCHEMA_VERSION = 8;
+// v9: keeps.hide holds when it was removed, so a later purchase from that seller brings it back.
+const SCHEMA_VERSION = 9;
 const MIGRATIONS = {
   2: ['CREATE INDEX IF NOT EXISTS status_kind ON status(kind)', 'DROP INDEX IF EXISTS status_kind_t', 'DROP INDEX IF EXISTS status_name'],
   3: ['ALTER TABLE status ADD COLUMN u INTEGER NOT NULL DEFAULT 0', 'UPDATE status SET u = MAX(t, name_t) WHERE u = 0 AND (t > 0 OR name_t > 0)',
@@ -83,7 +84,8 @@ const MIGRATIONS = {
       "UPDATE pbatches SET tmax = (SELECT MAX(json_extract(value, '$[0]')) FROM json_each(pbatches.data))",
       "DELETE FROM meta WHERE k LIKE 'set:%'"],
   7: ['CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID'],
-  8: ['ALTER TABLE keeps ADD COLUMN hide INTEGER NOT NULL DEFAULT 0']
+  8: ['ALTER TABLE keeps ADD COLUMN hide INTEGER NOT NULL DEFAULT 0'],
+  9: ["UPDATE keeps SET hide = CAST(strftime('%s', 'now') AS INTEGER) WHERE hide = 1"]
 };
 let migrated = false;
 async function migrate(env) {
@@ -164,7 +166,7 @@ const LIST_CTE = `WITH x AS (
     SELECT b.uid AS uid, json_extract(p.value, '$[1]') AS s FROM pbatches b, json_each(b.data) p WHERE json_extract(p.value, '$[0]') >= ?1
     UNION ALL SELECT uid, seller FROM keeps WHERE pin = 1 OR note = 1),
   y AS (SELECT uid, json_group_array(DISTINCT s) AS s FROM x
-    WHERE NOT EXISTS (SELECT 1 FROM keeps k WHERE k.uid = x.uid AND k.seller = x.s AND k.hide = 1) GROUP BY uid)`;
+    WHERE NOT EXISTS (SELECT 1 FROM keeps k WHERE k.uid = x.uid AND k.seller = x.s AND k.hide > 0) GROUP BY uid)`;
 async function prune(env) {
   const day = new Date().toISOString().slice(0, 10);
   if (firstV(await metaGet(env, 'pruned').run()) === day) return;
@@ -281,7 +283,15 @@ async function upload(req, env, me) {
   if (q.purchases + buys.length > DAY_CAP.purchases) return json({ error: capMsg('purchases') }, 429);
   if (q.sellers + fresh > DAY_CAP.sellers) return json({ error: capMsg('new sellers') }, 429);
   q.uploads++; q.purchases += buys.length; q.sellers += fresh;
-  const st = [];
+  const latest = new Map(); // seller -> newest purchase in this upload
+  for (const b of buys) if (!(latest.get(b.s) >= b.ts)) latest.set(b.s, b.ts);
+  const st = [
+    // bought from a seller you removed, after you removed it: it comes back to your list (you can remove it again)
+    env.DB.prepare(`UPDATE keeps SET hide = 0 WHERE uid = ?1 AND hide > 0 AND EXISTS
+        (SELECT 1 FROM json_each(?2) j WHERE json_extract(j.value, '$[0]') = keeps.seller AND json_extract(j.value, '$[1]') > keeps.hide)`)
+      .bind(me.uid, JSON.stringify([...latest])),
+    env.DB.prepare('DELETE FROM keeps WHERE uid = ?1 AND hide = 0 AND pin = 0 AND note = 0').bind(me.uid)
+  ];
   st.push(
     env.DB.prepare('INSERT INTO pbatches (uid, n, data, tmax) VALUES (?1, ?2, ?3, ?4)')
       .bind(me.uid, buys.length, JSON.stringify(buys.map(b => [b.ts, b.s, b.it, b.ce, b.ct, b.id])), Math.max(...buys.map(b => b.ts))),
@@ -333,8 +343,8 @@ async function forget(env, me) {
 
 /* ---------- pins, notes and removed sellers ---------- */
 // items: [[seller, pin, note, hide]] with 0 or 1 (null or missing = leave as it is). pin / note: the seller stays on your list
-// for good. hide: you removed it (it leaves your list and top 100 at once, is not checked, and a new purchase does not bring
-// it back); removing also unpins it, and hide = 0 restores it. Only what changed is written; a seller with none of the three
+// for good. hide: you removed it (it leaves your list and top 100 at once and is not checked; the time is kept, and a purchase
+// made after it brings the seller back); removing also unpins it, and hide = 0 restores it. Only what changed is written; a seller with none of the three
 // is removed from keeps. A seller not on your list yet (e.g. a note kept on your device for a seller that dropped off) is
 // added back, so it is checked again.
 async function postKeep(req, env, me) {
@@ -359,8 +369,8 @@ async function postKeep(req, env, me) {
   const pick = (v, o) => (v === null ? o : v);
   for (const [id, pin, note, hide] of items) {
     const o = have.get(id) || { pin: 0, note: 0, hide: 0 };
-    const n = { pin: pick(pin, o.pin), note: pick(note, o.note), hide: pick(hide, o.hide) };
-    if (n.hide && !o.hide) n.pin = 0; // removing unpins
+    const n = { pin: pick(pin, o.pin), note: pick(note, o.note), hide: hide === null ? o.hide : hide ? (o.hide || now()) : 0 };
+    if (n.hide && !o.hide) n.pin = 0; // removing unpins (hide = when it was removed)
     if (n.pin === o.pin && n.note === o.note && n.hide === o.hide) continue;
     if (!n.pin && !n.note && !n.hide) { have.delete(id); ups.delete(id); dels.add(id); }
     else { have.set(id, n); ups.set(id, [id, n.pin, n.note, n.hide]); dels.delete(id); }

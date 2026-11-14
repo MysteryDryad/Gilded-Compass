@@ -251,7 +251,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     <div class="gate-actions" id="gateActions"></div>
     <div id="loginMsg"></div>
     <table class="tos" aria-label="How your data and key are used">
-      <tr><th>Data storage</th><td>Your player id and name, your bazaar purchases from the last 60 days (seller, items, price, time) sent by the 🧭 userscript, and which sellers you pinned, wrote a note for or removed (the note text stays on your device). Older purchases are deleted automatically. Delete everything any time with "Delete my data".</td></tr>
+      <tr><th>Data storage</th><td>Your player id and name, your bazaar purchases from the last 60 days (seller, items, price, time) sent by the 🧭 userscript, and which sellers you pinned, wrote a note for or removed, and when (the note text stays on your device). Older purchases are deleted automatically. Delete everything any time with "Delete my data".</td></tr>
       <tr><th>Data sharing</th><td>Your purchases: none. Only you, signed in through your own key, can see them. The bazaar open/closed results and seller names your userscript looks up are public Torn information; the site keeps them and shares them with other players who buy from the same sellers.</td></tr>
       <tr><th>Purpose of use</th><td>Your personal directory of the bazaars you buy from, and which of them are open.</td></tr>
       <tr><th>Key storage &amp; sharing</th><td>The 🧭 userscript keeps your key on your device only and calls Torn with it directly. It is sent to this site once to confirm who you are, then forgotten: never stored here, never shared.</td></tr>
@@ -312,8 +312,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
 
       <div class="sv-card">
         <h3>Removed sellers</h3>
-        <p>Sellers you removed with <span class="rm-ic">−</span> stay off your list on every device, even if you buy from them again, and
-          your 🧭 userscript stops checking their bazaar. Restore one to bring it back.</p>
+        <p>Sellers you removed with <span class="rm-ic">−</span> stay off your list on every device, and your 🧭 userscript stops
+          checking their bazaar. Buy from one again and it comes back by itself (you can remove it again), or restore it here.</p>
         <div id="removedList"></div>
       </div>
 
@@ -882,7 +882,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     b.disabled = false;
     render(); // pinned first (an unpinned seller with no buys in 60 days stays on screen until the next reload)
   });
-  // Remove: the red − takes a seller off your list (on every device, until you restore it in ⚙ Settings).
+  // Remove: the red − takes a seller off your list (on every device, until you buy from it again or restore it in ⚙ Settings).
   const removedCount = () => { let n = 0; for (const k of KEEPS.values()) if (k.hide) n++; return n; };
   let toastT = null;
   function toast(html, onUndo) {
