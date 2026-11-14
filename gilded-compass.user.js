@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.1
+// @version      0.5.2
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -47,7 +47,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.1'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.2'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -123,6 +123,7 @@
     ready: () => !!cfg.key()
   };
   const KEYURL = 'https://www.torn.com/preferences.php#tab=api?step=addNewKey&title=GildedCompass&user=basic,log,bazaar&torn=logtypes,items';
+  const KEY_WRONG = 'Torn says your saved key is wrong (it may have been deleted or replaced on Torn). Paste your current key below and tap Save.';
   const KEY_NO_BAZAAR = 'Your key can\'t look at bazaars yet. Make a new key with "Create the key for me" (it now ticks bazaar), then paste it in the 🧭 settings on Torn.';
 
   /* ===================== the site ===================== */
@@ -155,9 +156,43 @@
     if (er) throw Object.assign(new Error('Torn API: ' + (er.error || er.code) + ' (code ' + er.code + ')'), { code: er.code });
     return j;
   }
-  function api(path, params, key) {
+  async function api(path, params, key) {
     const qs = Object.entries(params || {}).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
-    return apiUrl('https://api.torn.com/v2/' + path + (qs ? '?' + qs : ''), key);
+    const url = 'https://api.torn.com/v2/' + path + (qs ? '?' + qs : '');
+    const used = key || cfg.key();
+    try { return await apiUrl(url, used); }
+    catch (e) {
+      if (e.code !== 2 || key) throw e; // a key typed in the settings box is tested as it is
+      const good = await recoverKey(used);
+      if (!good) throw Object.assign(new Error(KEY_WRONG), { code: 2 });
+      return apiUrl(url, good);
+    }
+  }
+  // Torn said "wrong key". In Torn PDA every open Torn tab (and the Gilded Compass page) keeps its own copy of the key, and one
+  // can be out of date, for example after you made a new key. Before asking you to set up again, try the shared copy, this
+  // page's copy and Torn PDA's key (and the same key once more, in case Torn had a hiccup); keep whichever works.
+  const keyShape = k => /^[A-Za-z0-9]{16}$/.test(String(k || ''));
+  let recovering = null;
+  function recoverKey(bad) {
+    if (recovering) return recovering;
+    recovering = (async () => {
+      try { await loadShared(); } catch (e) { /* use what this page has */ }
+      const pdaKey = IN_PDA ? PDA_KEY : '';
+      const tries = [sget('apikey', ''), sgetLocal('apikey', ''), pdaKey].filter(k => keyShape(k) && k !== bad);
+      tries.push(bad);
+      for (const k of [...new Set(tries)]) {
+        if (!keyShape(k)) continue;
+        try {
+          await apiUrl('https://api.torn.com/v2/user/log?limit=1', k);
+          if (k !== bad || sget('apikey', '') !== (k === pdaKey ? '' : k)) sset('apikey', k === pdaKey ? '' : k); // every copy now has the key that works
+          state.keyFixedAt = Date.now();
+          return k;
+        } catch (e) { if (e.rate) return null; }
+      }
+      return null;
+    })();
+    recovering.finally(() => { recovering = null; });
+    return recovering;
   }
   // Rate limits and busy replies: wait and try again a few times before stopping (progress is saved).
   async function apiPatient(path, params) {
@@ -330,13 +365,13 @@
         }
       }
       if (Object.keys(state.pending).length || (firstSync && added)) await sendToSite(firstSync && added ? 'first' : false);
-      state.lastError = null; state.syncedAt = Date.now(); save(); shareSync(); setStatus('');
+      state.lastError = null; state.needsSetup = false; state.syncedAt = Date.now(); save(); shareSync(); setStatus('');
       itemsIfDue();
       if (added) sellersCache = null; // new sellers: fetch the list again before the next checks
       setBtn('ok', added ? `Sent ${added} new purchase${added === 1 ? '' : 's'}` : 'Up to date');
       return { added, sellers: [...new Set(sellers)] };
     } catch (e) {
-      state.lastError = hideKey(e.message || e);
+      state.lastError = hideKey(e.message || e); state.lastErrorAt = Date.now();
       if (e.setup || e.code === 2 || e.code === 16) state.needsSetup = true;
       setBtn('err', state.lastError);
       return { error: state.lastError };
@@ -347,6 +382,7 @@
   // For "Copy debug sample" on the Gilded Compass page (never contains a key).
   function debugSample() {
     return { version: VERSION, inPDA: IN_PDA, usingPdaKey: IN_PDA && !sget('apikey', ''), signedIn: !!sget('token', ''), logTypes: state.logTypesSeen || null,
+      keyLooksRight: keyShape(cfg.key()), keyCopiesMatch: sget('apikey', '') === sgetLocal('apikey', ''), keyFixedAt: state.keyFixedAt || null, lastErrorAt: state.lastErrorAt || null,
       logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
       oldest: state.oldest, resume: state.resume ? Object.assign({}, state.resume, { seen: undefined }) : null, lastError: state.lastError,
       lastCheckAt: state.lastCheckAt || null, lastCheckError: state.lastCheckError || null, keyNoBazaar: !!state.keyNoBazaar,
@@ -498,7 +534,7 @@
       <label>Torn API key (Custom: log and bazaar ticked)<input id="gc-key" type="password" autocomplete="off" placeholder="${usingPda ? 'using Torn PDA\'s key' : sget('apikey', '') ? 'saved (leave empty to keep)' : 'paste the new key'}"></label>
       <a class="gc-a" href="${KEYURL}" target="_blank" rel="noopener">Create the key for me ↗</a>
       ${IN_PDA && !usingPda ? '<button data-act="usepda">Use Torn PDA\'s key</button>' : ''}
-      <div id="gc-msg">${msg.text ? `<div class="${msg.ok ? 'gc-ok' : 'gc-err'}">${esc(msg.text)}</div>` : state.lastError ? `<div class="gc-err">Last sync: ${esc(state.lastError)}</div>` : ''}</div>
+      <div id="gc-msg">${msg.text ? `<div class="${msg.ok ? 'gc-ok' : 'gc-err'}">${esc(msg.text)}</div>` : state.lastError ? `<div class="gc-err">Last sync${state.lastErrorAt ? ' (' + esc(new Date(state.lastErrorAt).toLocaleString()) + ')' : ''}: ${esc(state.lastError)}</div>` : ''}</div>
       <button data-act="save" class="gc-gold">Save and sign in</button>
       <p class="gc-note" id="gc-status">${statusText()}</p>
       <p class="gc-note">How far back to look, debug sample and deleting your data: <b>⚙</b> on your Gilded Compass page.</p>
@@ -572,6 +608,19 @@
     if (w) { try { w.opener = null; } catch (e) { /* ignore */ } return true; }
     return false;
   }
+  // The 🧭 box opened because of an earlier error: test the key now. If it works, the error was old (or from another tab).
+  async function recheckKey() {
+    setMsg('Checking your key…', true);
+    try {
+      await api('user/log', { limit: 1 });
+      state.needsSetup = false; state.lastError = null; save();
+      showOpenLink('Your key works ✓ (that error was from earlier).');
+      run('tap');
+    } catch (e) {
+      state.lastError = hideKey(e.message || e); state.lastErrorAt = Date.now(); save();
+      setMsg(state.lastError, false);
+    }
+  }
   // When a new tab can't be opened automatically, a plain link always works.
   function showOpenLink(text) {
     const p = document.getElementById('gc-setup');
@@ -581,7 +630,8 @@
     if (m) m.insertAdjacentHTML('beforeend', `<a class="gc-a gc-gold" data-act="open" href="${esc(siteUrl())}" target="_blank" rel="noopener" style="text-align:center">Open my list →</a>`);
   }
   function tap() {
-    if (!cfg.ready() || state.needsSetup) { openSetup(); return; }
+    if (!cfg.ready()) { openSetup(); return; }
+    if (state.needsSetup) { openSetup(); recheckKey(); return; }
     if (!openSite()) {
       if (IN_PDA) showOpenLink('Tap below to open your list.');
       else location.href = siteUrl(); // pop-up blocked: open it here instead
@@ -732,7 +782,7 @@
       // everything the button, the settings box and the site page call; a missing one makes the test fail to load
       wired: { tap, openSite, siteUrl, showOpenLink, openSetup, renderSetup, onSetup, setMsg, setStatus, statusText, run, readRange,
         sendToSite, siteMe, signIn, token, debugSample, initSite, init, mount, attachPointer, placeBtn, stepAside, setBtn,
-        checkBazaars, paced, nextToCheck, mySellers, postChecks, itemsIfDue, parseBazaar, parseName } };
+        checkBazaars, paced, nextToCheck, mySellers, postChecks, itemsIfDue, parseBazaar, parseName, recoverKey, recheckKey } };
   }
   if (typeof document !== 'undefined' && !globalThis.__GC_TEST) init();
 })();

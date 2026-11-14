@@ -111,6 +111,11 @@ already dropped off brings it back; an unpinned seller stays on screen until the
   401 asks it once to sign in again. Userscripts older than 0.5.0 get an "update" notice (they can still sync purchases, not check).
 - Torn PDA keeps each site's storage separate, so `apikey`, `token`, `me`, `sync`, `ckpos`, `ckat` and `itemsat` are also kept in
   `PDA_storage` (shared by every page, as in Arbitrage).
+- **Wrong-key recovery (0.5.2):** in Torn PDA every open tab keeps its own copy of the key and of the saved state, so one tab with an
+  out-of-date key (e.g. after the player made a new key) used to save "needs setup" and leave the 🧭 box stuck on "Torn rejected the
+  API key". Now a Torn code 2 first tries the shared copy, this page's copy, PDA's key and the same key again (`recoverKey`) and keeps
+  the one that works; a tap with an old error re-tests the key (`recheckKey`); any successful sync clears "needs setup". The debug
+  sample shows `keyLooksRight`, `keyCopiesMatch`, `keyFixedAt` (never the key).
 - Self-repair instead of a Re-send button: at the start of a sync, if the site holds 0 purchases (`GET /api/me` → `purchases`) but this
   device has synced before, the whole log is read again. (So "Delete my data" alone comes back on the next sync; the page says to remove the userscript too.)
 
