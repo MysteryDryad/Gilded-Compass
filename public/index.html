@@ -124,7 +124,7 @@ select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); ba
   font: 700 12.5px Inter, system-ui, sans-serif; color: var(--gold); border: 1px solid var(--gold2); background: var(--bg); font-variant-numeric: tabular-nums; }
 .whois { min-width: 0; flex: 1; }
 .sl { text-decoration: none; }
-.sl.nm { font-weight: 700; font-size: 15px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl.nm { font-weight: 700; font-size: 15px; line-height: 20px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sl.nm:hover { color: var(--gold); }
 .sl.nm.unk { color: var(--muted); font-weight: 500; font-style: italic; }
 .sid { color: var(--muted); font-size: 11.5px; }
@@ -156,7 +156,12 @@ select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); ba
 .cardx.pinned { border-color: var(--gold2); }
 .kept { white-space: normal !important; font-style: italic; }
 .rmbtn { border: 0; background: none; cursor: pointer; color: var(--red); padding: 0; width: 22px; height: 22px; border-radius: 50%;
-  font: 800 20px/22px Inter, system-ui, sans-serif; text-align: center; }
+  display: grid; place-items: center; }
+.rmbtn i { display: block; width: 13px; height: 3px; border-radius: 2px; background: currentColor; } /* the − itself, drawn */
+/* the − sits in a line of text like the name's (same font, same height, same top), raised to the middle of the letters:
+   vertical-align: middle = half the font's x-height above the baseline, plus a little towards the capitals */
+.ctm { align-self: start; font: 700 15px/20px Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.ctm .rmbtn { display: inline-grid; vertical-align: middle; position: relative; top: -1px; }
 .rmbtn:hover, .rmbtn:focus-visible { background: color-mix(in srgb, var(--red) 14%, transparent); }
 .rm-ic { color: var(--red); font-weight: 800; }
 #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 60; max-width: calc(100vw - 32px);
@@ -205,6 +210,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
 
 /* phone */
 @media (max-width: 700px) {
+  .ctm { margin-top: 5px; } /* phones: no [id] line, so the name sits in the middle of the 30px rank circle */
   header.brand { padding-top: 14px; gap: 10px; position: relative; }
   .brand h1 { font-size: 19px; }
   .titleblock { padding-right: 136px; min-width: 0; }
@@ -500,7 +506,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
       <div class="ct">
         <div class="ctl"><span class="rank" title="Rank by purchases${st.chips.size ? ' (' + esc(chipLabel()) + ')' : ''}">${none ? '–' : x.rank}</span>${pin ? '<span class="pinmark" title="Pinned: always on your list">📌</span>' : ''}
         <div class="whois"><a class="sl nm${nm ? '' : ' unk'}" href="${bazaar(id)}" target="_blank" rel="noopener noreferrer" title="${nm ? esc(nm) + ': open their bazaar' : 'Open their bazaar'}">${nm ? esc(nm) : 'Player ' + id}</a><a class="sl sid" href="${profile(id)}" target="_blank" rel="noopener noreferrer" title="Open their profile">[${id}]</a></div></div>
-        <button class="rmbtn" data-rm="${id}" title="Remove from your list" aria-label="Remove ${esc(nm || 'player ' + id)} from your list">−</button>
+        <div class="ctm"><button class="rmbtn" data-rm="${id}" title="Remove from your list" aria-label="Remove ${esc(nm || 'player ' + id)} from your list"><i></i></button></div>
         <div class="ctr">${seal(id)}</div>
       </div>
       ${none ? `<div class="icons"><span class="kept">No buys in the last 60 days. Kept on your list because ${why}.</span></div>` : `<div class="icons">${types}${ones}</div>
