@@ -12,7 +12,7 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 - **Pinned sellers and sellers with a note are never dropped** (`keeps` table: `pin`, `note` flags; only the fact that a note
   exists is sent, the note text stays in the browser). Pinned sellers are shown first in every sort and in the "Open now" strip,
   and pins show on every device. A kept seller with no buys in the 60 days still gets a card ("No buys in the last 60 days…").
-- **Removed sellers** (red − on a card, `keeps.hide` = when it was removed): off the player's list on every device, out of their
+- **Removed sellers** (red − in the middle of a card's top row, between the name and the seal, `keeps.hide` = when it was removed): off the player's list on every device, out of their
   top 100, not checked by their userscript (uploads and the daily cleanup leave them out of `usets`; their purchases stay stored
   and the page leaves them out of every total). **A purchase made after the removal brings the seller back** (the upload clears
   `hide`; re-sent older purchases don't), and it can be removed again. Removing unpins. An Undo pop-up follows each removal, and

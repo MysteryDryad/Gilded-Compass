@@ -113,11 +113,13 @@ select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); ba
 .chip[aria-pressed="true"] b { color: inherit; opacity: .8; }
 
 /* compass cards */
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; } /* wide enough for a name left of the centred − */
 .cardx { position: relative; border-radius: 16px; border: 1px solid var(--line); background: linear-gradient(160deg, var(--card2), var(--card) 60%);
   padding: 12px 14px 10px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .cardx.hl { border-color: var(--gold); box-shadow: 0 0 0 2px var(--glow), var(--shadow); }
-.ct { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ct { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; }
+.ctl { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ctr { display: flex; justify-content: flex-end; min-width: 0; }
 .rank { flex: 0 0 auto; min-width: 30px; height: 30px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center;
   font: 700 12.5px Inter, system-ui, sans-serif; color: var(--gold); border: 1px solid var(--gold2); background: var(--bg); font-variant-numeric: tabular-nums; }
 .whois { min-width: 0; flex: 1; }
@@ -496,14 +498,15 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const why = pin && (note || (KEEPS.get(id) || {}).note) ? 'it is pinned and has a note' : pin ? 'it is pinned' : 'it has a note';
     return `<article class="cardx${glowing(id) ? ' hl' : ''}${pin ? ' pinned' : ''}" data-id="${id}">
       <div class="ct">
-        <span class="rank" title="Rank by purchases${st.chips.size ? ' (' + esc(chipLabel()) + ')' : ''}">${none ? '–' : x.rank}</span>${pin ? '<span class="pinmark" title="Pinned: always on your list">📌</span>' : ''}
-        <div class="whois"><a class="sl nm${nm ? '' : ' unk'}" href="${bazaar(id)}" target="_blank" rel="noopener noreferrer" title="Open their bazaar">${nm ? esc(nm) : 'Player ' + id}</a><a class="sl sid" href="${profile(id)}" target="_blank" rel="noopener noreferrer" title="Open their profile">[${id}]</a></div>
-        ${seal(id)}
+        <div class="ctl"><span class="rank" title="Rank by purchases${st.chips.size ? ' (' + esc(chipLabel()) + ')' : ''}">${none ? '–' : x.rank}</span>${pin ? '<span class="pinmark" title="Pinned: always on your list">📌</span>' : ''}
+        <div class="whois"><a class="sl nm${nm ? '' : ' unk'}" href="${bazaar(id)}" target="_blank" rel="noopener noreferrer" title="${nm ? esc(nm) + ': open their bazaar' : 'Open their bazaar'}">${nm ? esc(nm) : 'Player ' + id}</a><a class="sl sid" href="${profile(id)}" target="_blank" rel="noopener noreferrer" title="Open their profile">[${id}]</a></div></div>
+        <button class="rmbtn" data-rm="${id}" title="Remove from your list" aria-label="Remove ${esc(nm || 'player ' + id)} from your list">−</button>
+        <div class="ctr">${seal(id)}</div>
       </div>
       ${none ? `<div class="icons"><span class="kept">No buys in the last 60 days. Kept on your list because ${why}.</span></div>` : `<div class="icons">${types}${ones}</div>
       <div class="stats"><span><b>${fmt(x.v[0])}</b>buys</span><span><b>${fmt(x.v[1])}</b>items</span><span class="spent" title="$${fmt(x.v[2])}"><b>${money(x.v[2])}</b></span></div>
       <div class="meter"><i style="width:${maxP ? Math.max(3, Math.round(100 * x.v[0] / maxP)) : 0}%"></i></div>`}
-      <div class="cf"><span class="visit">${v ? '✓ visited ' + agoMs(v) : ''}</span><span class="cfb"><button class="pinbtn" data-pin="${id}" aria-pressed="${pin}" title="${pin ? 'Unpin' : 'Pin: show first, and keep on your list for good'}">${pin ? '📌 Pinned' : '📌 Pin'}</button><button class="notebtn" data-note="${id}">${note ? '✎ edit note' : '✎ add note'}</button><button class="rmbtn" data-rm="${id}" title="Remove from your list" aria-label="Remove ${esc(nm || 'player ' + id)} from your list">−</button></span></div>
+      <div class="cf"><span class="visit">${v ? '✓ visited ' + agoMs(v) : ''}</span><span class="cfb"><button class="pinbtn" data-pin="${id}" aria-pressed="${pin}" title="${pin ? 'Unpin' : 'Pin: show first, and keep on your list for good'}">${pin ? '📌 Pinned' : '📌 Pin'}</button><button class="notebtn" data-note="${id}">${note ? '✎ edit note' : '✎ add note'}</button></span></div>
       ${note ? `<div class="note">${esc(note)}</div>` : ''}
     </article>`;
   }
