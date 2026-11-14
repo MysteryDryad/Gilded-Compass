@@ -23,9 +23,10 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS status (id INTEGER PRIMARY KEY, is_open INTEGER, has_bazaar INTEGER, missing INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL DEFAULT 0, top INTEGER NOT NULL DEFAULT 0, kind INTEGER NOT NULL DEFAULT 2, name TEXT, name_t INTEGER NOT NULL DEFAULT 0, u INTEGER NOT NULL DEFAULT 0)',
   'CREATE INDEX IF NOT EXISTS status_u ON status(u)',
   'CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)',
-  // sellers a player pinned or wrote a note for (only that a note exists; the text stays on their device): never dropped
-  'CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID',
-  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '7')"
+  // per player and seller: pinned / has a note (only that a note exists; the text stays on their device) = never dropped;
+  // hide = removed by the player (never shown or checked again until they restore it)
+  'CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, hide INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID',
+  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '8')"
 ];
 const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owner jailed, inactive, too low, paused
 const SESSION_DAYS = 180;
@@ -34,7 +35,8 @@ const TOP_TIER = 100;
 // Workers Paid (since 2026-11-13) includes 50 million rows written a month; these caps keep one player's worst day near
 // 150,000 written rows (a few cents), while a real first sync of a big history (26,000 purchases, 4,000 sellers) fits easily.
 const DAY_CAP = { purchases: 300000, sellers: 40000, uploads: 2000, tops: 200, changes: 20000, items: 5, keeps: 3000 };
-const KEEP_MAX = 1000; // pinned or noted sellers per player
+const KEEP_MAX = 3000; // pinned, noted or removed sellers per player
+const HIDDEN = '(SELECT seller FROM keeps WHERE uid = ?1 AND hide = 1)'; // the player's removed sellers (?1 = uid)
 // Everyone's list covers the last 60 days of bazaar purchases: older purchases are refused and deleted, and a seller not
 // bought from in 60 days drops off (new sellers take their place). Keeps the database small.
 const HISTORY_DAYS = 60;
@@ -61,7 +63,8 @@ async function withSchema(env, fn) {
 // v5: bazaar checks moved to the players' userscripts; the old cron's indexes (each an extra written row per change) go.
 // v6: 60 days of history for everyone: each bundle knows its newest purchase (tmax) so old ones can be dropped; no per-player range.
 // v7: pinned sellers and sellers with a note (keeps) stay on the list for good.
-const SCHEMA_VERSION = 7;
+// v8: a player can remove a seller from their list (keeps.hide).
+const SCHEMA_VERSION = 8;
 const MIGRATIONS = {
   2: ['CREATE INDEX IF NOT EXISTS status_kind ON status(kind)', 'DROP INDEX IF EXISTS status_kind_t', 'DROP INDEX IF EXISTS status_name'],
   3: ['ALTER TABLE status ADD COLUMN u INTEGER NOT NULL DEFAULT 0', 'UPDATE status SET u = MAX(t, name_t) WHERE u = 0 AND (t > 0 OR name_t > 0)',
@@ -79,7 +82,8 @@ const MIGRATIONS = {
   6: ['ALTER TABLE pbatches ADD COLUMN tmax INTEGER NOT NULL DEFAULT 0',
       "UPDATE pbatches SET tmax = (SELECT MAX(json_extract(value, '$[0]')) FROM json_each(pbatches.data))",
       "DELETE FROM meta WHERE k LIKE 'set:%'"],
-  7: ['CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID']
+  7: ['CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID'],
+  8: ['ALTER TABLE keeps ADD COLUMN hide INTEGER NOT NULL DEFAULT 0']
 };
 let migrated = false;
 async function migrate(env) {
@@ -156,18 +160,21 @@ async function cron(env) {
 // Pinned sellers and sellers with a note (keeps) always stay on their player's list.
 // A bundle is dropped when its newest purchase is old; a bundle that straddles the line stays until then (the page and the
 // seller lists only count the purchases inside the 60 days).
+const LIST_CTE = `WITH x AS (
+    SELECT b.uid AS uid, json_extract(p.value, '$[1]') AS s FROM pbatches b, json_each(b.data) p WHERE json_extract(p.value, '$[0]') >= ?1
+    UNION ALL SELECT uid, seller FROM keeps WHERE pin = 1 OR note = 1),
+  y AS (SELECT uid, json_group_array(DISTINCT s) AS s FROM x
+    WHERE NOT EXISTS (SELECT 1 FROM keeps k WHERE k.uid = x.uid AND k.seller = x.s AND k.hide = 1) GROUP BY uid)`;
 async function prune(env) {
   const day = new Date().toISOString().slice(0, 10);
   if (firstV(await metaGet(env, 'pruned').run()) === day) return;
   const start = historyStart();
   const r = await env.DB.batch([
     env.DB.prepare('DELETE FROM pbatches WHERE tmax < ?1').bind(start),
-    // each player's seller list: sellers with a purchase in the last 60 days, plus the ones they pinned or wrote a note for
-    env.DB.prepare(`UPDATE usets SET sellers = n.s FROM (SELECT uid, json_group_array(DISTINCT s) AS s FROM (
-        SELECT b.uid AS uid, json_extract(p.value, '$[1]') AS s FROM pbatches b, json_each(b.data) p WHERE json_extract(p.value, '$[0]') >= ?1
-        UNION ALL SELECT uid, seller FROM keeps) GROUP BY uid) AS n WHERE usets.uid = n.uid`).bind(start),
-    env.DB.prepare(`DELETE FROM usets WHERE uid NOT IN (SELECT b.uid FROM pbatches b, json_each(b.data) p WHERE json_extract(p.value, '$[0]') >= ?1
-        UNION SELECT uid FROM keeps)`).bind(start),
+    // each player's seller list: sellers with a purchase in the last 60 days, plus the ones they pinned or wrote a note for,
+    // minus the ones they removed
+    env.DB.prepare(`${LIST_CTE} UPDATE usets SET sellers = y.s FROM y WHERE usets.uid = y.uid`).bind(start),
+    env.DB.prepare(`${LIST_CTE} DELETE FROM usets WHERE uid NOT IN (SELECT uid FROM y)`).bind(start),
     env.DB.prepare('DELETE FROM tops WHERE NOT EXISTS (SELECT 1 FROM usets u, json_each(u.sellers) j WHERE u.uid = tops.uid AND j.value = tops.seller)'),
     env.DB.prepare('DELETE FROM status WHERE id NOT IN (SELECT j.value FROM usets u, json_each(u.sellers) j)'),
     metaSet(env, 'pruned', day)
@@ -215,13 +222,13 @@ async function getData(env, me, after) {
     env.DB.prepare('SELECT seq, data FROM pbatches WHERE uid = ?1 AND seq > ?2 AND tmax >= ?3 ORDER BY seq').bind(me.uid, after, historyStart()),
     env.DB.prepare("SELECT v FROM meta WHERE k IN (?1, 'items') ORDER BY k = 'items' LIMIT 1").bind('items:' + me.uid), env.DB.prepare('SELECT last_upload AS v FROM users WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('SELECT seller FROM tops WHERE uid = ?1').bind(me.uid),
-    env.DB.prepare('SELECT seller, pin, note FROM keeps WHERE uid = ?1').bind(me.uid)
+    env.DB.prepare('SELECT seller, pin, note, hide FROM keeps WHERE uid = ?1').bind(me.uid)
   ]);
   const parts = b.results.map(r => inner(r.data)).filter(Boolean);
   const last = b.results.length ? b.results[b.results.length - 1].seq : after;
   return rawJson(`{"me":${JSON.stringify(me)},"purchases":[${parts.join(',')}],"items":${firstV(items) || '{}'},` +
     `"settings":${JSON.stringify(SETTINGS)},"tops":${JSON.stringify(tp.results.map(r => r.seller))},` +
-    `"keeps":${JSON.stringify(kp.results.map(r => [r.seller, r.pin, r.note]))},` +
+    `"keeps":${JSON.stringify(kp.results.map(r => [r.seller, r.pin, r.note, r.hide]))},` +
     `"last":${Number(last) || 0},"lastUpload":${Number(firstV(u)) || 0},"now":${now()}}`);
 }
 // Only this user's sellers. First load (since = 0): walk the player's seller list once. Later polls: find the few rows
@@ -269,7 +276,7 @@ async function upload(req, env, me) {
   if (!buys.length) return json({ ok: true, received: all.length, inserted: 0 });
   const q = await dayCounter(env, me.uid);
   const S = JSON.stringify([...new Set(buys.map(b => b.s))]);
-  const fresh = (await env.DB.prepare('SELECT COUNT(*) AS n FROM json_each(?1) WHERE value NOT IN (SELECT id FROM status)').bind(S).first()).n;
+  const fresh = (await env.DB.prepare('SELECT COUNT(*) AS n FROM json_each(?1) WHERE value NOT IN (SELECT id FROM status)').bind(S).first()).n; // (a removed seller may count; harmless)
   if (q.uploads + 1 > DAY_CAP.uploads) return json({ error: capMsg('uploads') }, 429);
   if (q.purchases + buys.length > DAY_CAP.purchases) return json({ error: capMsg('purchases') }, 429);
   if (q.sellers + fresh > DAY_CAP.sellers) return json({ error: capMsg('new sellers') }, 429);
@@ -278,9 +285,10 @@ async function upload(req, env, me) {
   st.push(
     env.DB.prepare('INSERT INTO pbatches (uid, n, data, tmax) VALUES (?1, ?2, ?3, ?4)')
       .bind(me.uid, buys.length, JSON.stringify(buys.map(b => [b.ts, b.s, b.it, b.ce, b.ct, b.id])), Math.max(...buys.map(b => b.ts))),
-    env.DB.prepare(`INSERT INTO usets (uid, sellers) VALUES (?1, ?2) ON CONFLICT(uid) DO UPDATE SET sellers =
+    env.DB.prepare(`INSERT INTO usets (uid, sellers) SELECT ?1, json_group_array(value) FROM json_each(?2) WHERE value NOT IN ${HIDDEN}
+        ON CONFLICT(uid) DO UPDATE SET sellers =
         (SELECT json_group_array(value) FROM (SELECT value FROM json_each(usets.sellers) UNION SELECT value FROM json_each(excluded.sellers)))`).bind(me.uid, S),
-    env.DB.prepare('INSERT OR IGNORE INTO status (id) SELECT value FROM json_each(?1)').bind(S));
+    env.DB.prepare(`INSERT OR IGNORE INTO status (id) SELECT value FROM json_each(?2) WHERE value NOT IN ${HIDDEN}`).bind(me.uid, S));
   st.push(env.DB.prepare('UPDATE users SET last_upload = ?2 WHERE uid = ?1').bind(me.uid, now()), metaSet(env, 'day:' + me.uid, JSON.stringify(q)));
   await env.DB.batch(st);
   return json({ ok: true, received: all.length, inserted: buys.length });
@@ -323,48 +331,59 @@ async function forget(env, me) {
   return json({ ok: true });
 }
 
-/* ---------- pins and notes: sellers that stay on your list for good ---------- */
-// items: [[seller, pin, note]] with 0 or 1 (null = leave as it is). Only what changed is written; a seller with neither is
-// removed from keeps (and drops off at the next daily cleanup if not bought from in 60 days). A seller not on the player's
-// list yet (e.g. a note kept on their device for a seller dropped before pins existed) is added back, so it is checked again.
+/* ---------- pins, notes and removed sellers ---------- */
+// items: [[seller, pin, note, hide]] with 0 or 1 (null or missing = leave as it is). pin / note: the seller stays on your list
+// for good. hide: you removed it (it leaves your list and top 100 at once, is not checked, and a new purchase does not bring
+// it back); removing also unpins it, and hide = 0 restores it. Only what changed is written; a seller with none of the three
+// is removed from keeps. A seller not on your list yet (e.g. a note kept on your device for a seller that dropped off) is
+// added back, so it is checked again.
 async function postKeep(req, env, me) {
   if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
   let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
   const raw = body && body.items;
-  if (!Array.isArray(raw) || raw.length > 200) return json({ error: 'items must be up to 200 [seller, pin, note]' }, 400);
+  if (!Array.isArray(raw) || raw.length > 200) return json({ error: 'items must be up to 200 [seller, pin, note, hide]' }, 400);
   const flag = v => (v === null || v === undefined ? null : v === 1 || v === true ? 1 : v === 0 || v === false ? 0 : undefined);
   const items = [];
   for (const r of raw) {
-    const ok = Array.isArray(r) && /^\d{1,10}$/.test(String(r[0])) && Number(r[0]) > 0 && flag(r[1]) !== undefined && flag(r[2]) !== undefined;
+    const ok = Array.isArray(r) && /^\d{1,10}$/.test(String(r[0])) && Number(r[0]) > 0 && [r[1], r[2], r[3]].every(v => flag(v) !== undefined);
     if (!ok) return json({ error: 'Bad item: ' + JSON.stringify(r).slice(0, 60) }, 400);
-    items.push([Number(r[0]), flag(r[1]), flag(r[2])]);
+    items.push([Number(r[0]), flag(r[1]), flag(r[2]), flag(r[3])]);
   }
   const [cur, set] = await env.DB.batch([
-    env.DB.prepare('SELECT seller, pin, note FROM keeps WHERE uid = ?1').bind(me.uid),
+    env.DB.prepare('SELECT seller, pin, note, hide FROM keeps WHERE uid = ?1').bind(me.uid),
     env.DB.prepare('SELECT sellers AS v FROM usets WHERE uid = ?1').bind(me.uid)
   ]);
-  const have = new Map(cur.results.map(r => [r.seller, { pin: r.pin, note: r.note }]));
+  const have = new Map(cur.results.map(r => [r.seller, { pin: r.pin, note: r.note, hide: r.hide }]));
   const mine = new Set(JSON.parse(firstV(set) || '[]'));
-  const ups = new Map(), dels = new Set(), add = new Set();
-  for (const [id, pin, note] of items) {
-    const o = have.get(id) || { pin: 0, note: 0 };
-    const n = { pin: pin === null ? o.pin : pin, note: note === null ? o.note : note };
-    if (n.pin === o.pin && n.note === o.note) continue;
-    if (!n.pin && !n.note) { have.delete(id); ups.delete(id); dels.add(id); }
-    else { have.set(id, n); ups.set(id, [id, n.pin, n.note]); dels.delete(id); if (!mine.has(id)) add.add(id); }
+  const ups = new Map(), dels = new Set(), add = new Set(), gone = new Set();
+  const pick = (v, o) => (v === null ? o : v);
+  for (const [id, pin, note, hide] of items) {
+    const o = have.get(id) || { pin: 0, note: 0, hide: 0 };
+    const n = { pin: pick(pin, o.pin), note: pick(note, o.note), hide: pick(hide, o.hide) };
+    if (n.hide && !o.hide) n.pin = 0; // removing unpins
+    if (n.pin === o.pin && n.note === o.note && n.hide === o.hide) continue;
+    if (!n.pin && !n.note && !n.hide) { have.delete(id); ups.delete(id); dels.add(id); }
+    else { have.set(id, n); ups.set(id, [id, n.pin, n.note, n.hide]); dels.delete(id); }
+    if (n.hide) { gone.add(id); add.delete(id); }
+    else { gone.delete(id); if (!mine.has(id) && (n.pin || n.note || o.hide)) add.add(id); } // restored, or kept but not listed
   }
-  const list = () => [...have.entries()].map(([id, k]) => [id, k.pin, k.note]);
+  const list = () => [...have.entries()].map(([id, k]) => [id, k.pin, k.note, k.hide]);
   if (!ups.size && !dels.size) return json({ ok: true, changed: 0, keeps: list() });
-  if (have.size > KEEP_MAX) return json({ error: `At most ${KEEP_MAX.toLocaleString('en-US')} pinned or noted sellers` }, 400);
+  if (have.size > KEEP_MAX) return json({ error: `At most ${KEEP_MAX.toLocaleString('en-US')} pinned, noted or removed sellers` }, 400);
   const q = await dayCounter(env, me.uid);
   const n = ups.size + dels.size;
-  if ((q.keeps || 0) + n > DAY_CAP.keeps) return json({ error: capMsg('pins and notes') }, 429);
+  if ((q.keeps || 0) + n > DAY_CAP.keeps) return json({ error: capMsg('pins, notes and removals') }, 429);
   q.keeps = (q.keeps || 0) + n;
   const st = [];
-  if (ups.size) st.push(env.DB.prepare(`INSERT INTO keeps (uid, seller, pin, note)
-      SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]') FROM json_each(?2) WHERE 1
-      ON CONFLICT(uid, seller) DO UPDATE SET pin = excluded.pin, note = excluded.note`).bind(me.uid, JSON.stringify([...ups.values()])));
+  if (ups.size) st.push(env.DB.prepare(`INSERT INTO keeps (uid, seller, pin, note, hide)
+      SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]') FROM json_each(?2) WHERE 1
+      ON CONFLICT(uid, seller) DO UPDATE SET pin = excluded.pin, note = excluded.note, hide = excluded.hide`).bind(me.uid, JSON.stringify([...ups.values()])));
   if (dels.size) st.push(env.DB.prepare('DELETE FROM keeps WHERE uid = ?1 AND seller IN (SELECT value FROM json_each(?2))').bind(me.uid, JSON.stringify([...dels])));
+  if (gone.size) {
+    const G = JSON.stringify([...gone]);
+    st.push(env.DB.prepare('UPDATE usets SET sellers = (SELECT json_group_array(value) FROM json_each(usets.sellers) WHERE value NOT IN (SELECT value FROM json_each(?2))) WHERE uid = ?1').bind(me.uid, G),
+      env.DB.prepare('DELETE FROM tops WHERE uid = ?1 AND seller IN (SELECT value FROM json_each(?2))').bind(me.uid, G));
+  }
   if (add.size) {
     const A = JSON.stringify([...add]);
     st.push(env.DB.prepare(`INSERT INTO usets (uid, sellers) VALUES (?1, ?2) ON CONFLICT(uid) DO UPDATE SET sellers =

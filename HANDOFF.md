@@ -12,6 +12,11 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 - **Pinned sellers and sellers with a note are never dropped** (`keeps` table: `pin`, `note` flags; only the fact that a note
   exists is sent, the note text stays in the browser). Pinned sellers are shown first in every sort and in the "Open now" strip,
   and pins show on every device. A kept seller with no buys in the 60 days still gets a card ("No buys in the last 60 days…").
+- **Removed sellers** (red − on a card, `keeps.hide`): off the player's list on every device, out of their top 100, not checked by
+  their userscript, and a new purchase does not bring them back (uploads and the daily cleanup leave them out of `usets`; their
+  purchases stay stored and the page leaves them out of every total). Removing unpins. An Undo pop-up follows each removal, and
+  ⚙ Settings › Removed sellers lists them with Restore (names remembered in the browser, `gc_removedNames`, in case the site
+  forgets them).
 - Only **Bazaar buy** log entries are read (log types whose title starts with "Bazaar buy"), and each entry is checked again before it is kept.
 - Only sellers **with a bazaar** are shown. A seller found to have no bazaar (or a deleted account) is hidden (they come back if a later check finds a bazaar).
 - No site password. The userscript signs in with the player's own Torn key. The key is used for one Torn call (`user/basic`: who owns this key?) and is never stored. It gets a random token, and only its SHA-256 is kept (sessions last 180 days). The page gets that token from the userscript (`gc:token` / `gc:signin`) or from `#t=` when 🧭 opens it; the page has no key box.
@@ -35,7 +40,7 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 `GET /api/status?since=` (my sellers' flags and names changed since), `POST /api/purchases {buys}` (idempotent by log id), `POST /api/tops`, `GET /api/settings` (`{lookback: 60}`, fixed; POST changes nothing), `POST /api/forget` (delete all my data),
 and for the userscript's checks: `GET /api/sellers` (my seller ids and my top 100), `POST /api/bazaar {results: [[id, is_open, has_bazaar, missing]], names: [[id, name, missing]]}`
 (at most 100 of each; only my own sellers; only changes are written; replies `{checked, changed, needName}`), `POST /api/items {items}` (Torn's item list, kept for me),
-`POST /api/keep {items: [[seller, pin, note]]}` (0/1, null = unchanged; at most 200 per call and 1,000 kept sellers; only changes
+`POST /api/keep {items: [[seller, pin, note, hide]]}` (0/1, null or missing = unchanged; hide = removed; at most 200 per call and 3,000 marked sellers; only changes
 are written; a seller not on my list yet is added back to it, e.g. a note kept on a device for a seller dropped before pins existed;
 replies with the full `keeps` list, which `/api/data` also returns).
 Gone: `/api/check-now`, `/api/probe` (they used the site's own key).
@@ -79,7 +84,8 @@ History: on the free plan (100,000 writes / 5,000,000 reads a day) the old minut
   check goes in the same row write. v5 dropped the old cron's indexes (`status_kind`, `tops_seller`), one written row less per change.
 - **60 days for everyone** (schema v6): each bundle stores its newest purchase time (`pbatches.tmax`). Once a day (the hourly cron,
   first run of each UTC day, marker `meta.pruned`) the Worker deletes bundles whose newest purchase is older than 60 days, rebuilds each
-  player's `usets` from the purchases inside the 60 days plus their `keeps` (players with neither are removed), and deletes `tops` and
+  player's `usets` from the purchases inside the 60 days plus their pinned/noted `keeps`, minus removed ones (`LIST_CTE`; players with
+  nothing left are removed), and deletes `tops` and
   shared `status` rows of sellers no longer in anyone's list. A bundle that straddles the line stays until its newest purchase is old (the page and seller lists
   only count purchases inside the 60 days). Logged as `prune: bundles N players N tops N sellers N`.
 - **Per player per day** (UTC), as a cost guard: 2,000 uploads, 300,000 purchases, 40,000 new sellers, 200 top-100 updates,
