@@ -31,7 +31,7 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 | `src/worker.js` | Worker for `/api/*` only (the page is served straight from `public/`). |
 | `src/logic.mjs` | Pure Worker logic (change detection, validation, tokens). Tested in `test.js`. |
 | `public/aggregate.js` | Totals per seller and item type, run **in the browser**; `forTypes` gives the totals for several picked item types at once (a purchase counts once if any of its items is picked) (free Workers get ~10 ms CPU per request). Tested in `test.js`: 23k purchases in ~25 ms. |
-| `public/index.html` | The page (no build). Without the userscript (or before it is set up, or signed out) a gate screen with Torn's API-key disclosure table, then the **Compass cards** design: an "Open now · your regulars" strip (your top 50 that are open), a sticky search / sort / Check now bar, a one-line summary, item-type chips with icons, and one card per seller (rank, gold seal: filled = open, hollow = closed, dashed = not checked yet; top item types as icons; buys, items, spent; visit glow; note). Seller names and the strip open the seller's bazaar, `https://www.torn.com/bazaar.php?userId=<id>#/` (the id must come before the `#`, or Torn shows your own bazaar; `#/` on the end, as TornTools and Torn PDA do); the small [id] opens their profile. |
+| `public/index.html` | The page (no build). Without the userscript (or before it is set up, or signed out) a gate screen with Torn's API-key disclosure table, then the **Compass cards** design: an "Open now · your regulars" strip (15 regulars: pinned first, then most bought from; shown as open only if the userscript saw them open in the last 5 minutes), a sticky search / sort / Check now bar, a one-line summary, item-type chips with icons, and one card per seller (rank, gold seal: filled = open, hollow = closed, dashed = not checked yet; top item types as icons; buys, items, spent; visit glow; note). Seller names and the strip open the seller's bazaar, `https://www.torn.com/bazaar.php?userId=<id>#/` (the id must come before the `#`, or Torn shows your own bazaar; `#/` on the end, as TornTools and Torn PDA do); the small [id] opens their profile. |
 | `public/_headers` | Security headers for the page. |
 | `wrangler.toml` | Assets, D1 binding, hourly housekeeping cron. |
 | `schema.sql` | Copy of the tables (the Worker creates them itself). |
@@ -62,6 +62,11 @@ Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each p
   rest of their sellers (cursor `ckpos`, shared between pages); the list comes from `GET /api/sellers` (cached 30 min, refreshed after new purchases).
 - **Torn open**: one round of 8 every 10 minutes (`ckat`, shared, so several tabs don't multiply it).
 - **Check now**: reads the log first (`gc:sync`), then checks the new sellers and the ones on screen (≤ 40, 4 at a time, plus ≤ 16 names) via `gc:check`.
+- **Regulars (0.5.5)**: 15 in all (pinned first, then most bought from). The page asks the userscript to check all 15 when it
+  opens and every 2 minutes while it is in use (`gc:check`, which now also returns `results` [id, open, has bazaar, gone] as seen
+  just now). A regular is shown under "Open now" only if the newest answer (the page's own check, or a change the site heard of
+  from any player) is "open" and less than 5 minutes old; the header says "checked N ago". Seals on the cards also use whichever
+  answer is newer (the page's own check wins unless the site heard of a change 30 s or more later).
   A background round in progress stops early to make way.
 - Torn replies: code 6/7 → account gone (`missing`), code 5 / HTTP 429 → stop and post what was done, code 16 → the key lacks `bazaar`
   (`KEY_NO_BAZAAR` shown on the page via `data-gc-keyerr`; background rounds pause 30 min).

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.4
+// @version      0.5.5
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -47,7 +47,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.4'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.5'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -529,7 +529,7 @@
     const de = typeof document !== 'undefined' && document.documentElement;
     if (de && de.hasAttribute('data-gc-userscript')) de.setAttribute('data-gc-checkedat', String(state.lastCheckAt));
     showKeyErr();
-    return { checked: results.length, named: names.length, changed, error };
+    return { checked: results.length, named: names.length, changed, error, results }; // results: [id, open, has bazaar, gone] as seen just now
   }
   // Torn's item list (names and types for the filters), weekly, for your page. Skipped if your key can't read it.
   async function itemsIfDue() {

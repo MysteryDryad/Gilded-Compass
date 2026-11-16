@@ -271,7 +271,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     <div id="notices"></div>
 
     <section class="regulars" aria-label="Your regulars open now">
-      <h2>✦ Open now <small>your regulars</small></h2>
+      <h2>✦ Open now <small id="regNote">your regulars</small></h2>
       <div class="strip" id="strip"></div>
     </section>
 
@@ -385,7 +385,9 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   const money = n => n >= 1e9 ? '$' + (n / 1e9).toFixed(2) + 'b' : n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'm' : n >= 1e4 ? '$' + (n / 1e3).toFixed(1) + 'k' : '$' + fmt(n);
   const ONE = '$1 items';
   const PAGE = 100;
-  const REGULARS = 50; // "your regulars" = your 50 most-bought-from sellers
+  const REGULARS = 15; // "your regulars": pinned sellers first, then your most-bought-from, 15 in all
+  const REG_FRESH = 5 * 60000; // a regular shows as open only if your 🧭 userscript saw it open this recently
+  const REG_EVERY = 2 * 60000; // while you use the page, your regulars are checked this often
 
   // One small icon per Torn item type.
   const ICON = {
@@ -440,11 +442,18 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   }
 
   function nameOf(id) { const s = STATUS.get(id); return s && s.name ? s.name : null; }
+  // The newest thing known about a seller's bazaar, with when it was seen (ms): your 🧭 userscript's own check (Check now, the
+  // regulars checks) or the last change the site heard of (any player's check). Within 30 s they count as the same moment.
+  const FRESH = new Map(); // id -> { at (ms), o, b, m }
+  function latest(id) {
+    const f = FRESH.get(id), s = STATUS.get(id), st = s && s.t ? (s.t - skew) * 1000 : 0;
+    if (f && f.at >= st - 30000) return f;
+    return s && s.t ? { at: st, o: s.o, b: s.b, m: s.m } : null;
+  }
   function baz(id) {
-    const s = STATUS.get(id);
-    if (!s || !s.t) return 'unchecked';
-    if (s.o) return 'open';
-    return s.b ? 'closed' : 'none';
+    const l = latest(id);
+    if (!l) return 'unchecked';
+    return l.m || !l.b ? 'none' : l.o ? 'open' : 'closed';
   }
   const SEAL = { open: 'Open', closed: 'Closed', unchecked: 'Checking' };
   function seal(id) {
@@ -539,17 +548,44 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const wait = Math.max(0, busyUntil - Date.now());
     renderTimer = setTimeout(() => { if (Date.now() < busyUntil) { renderTimer = null; renderSoon(); } else render(); }, wait);
   }
-  // Your regulars (top 50 overall) whose bazaar is open right now.
-  function renderStrip() {
+  // Your regulars: pinned sellers first, then your most-bought-from, 15 in all (sellers with a bazaar only).
+  function regulars() {
     const shown = DATA.sellers.filter(s => baz(s.id) !== 'none');
-    const regs = shown.filter(s => pinned(s.id)).concat(shown.filter(s => !pinned(s.id)).slice(0, REGULARS)); // pinned first
-    const open = regs.filter(s => baz(s.id) === 'open');
-    const waiting = regs.filter(s => baz(s.id) === 'unchecked').length;
+    return shown.filter(s => pinned(s.id)).concat(shown.filter(s => !pinned(s.id))).slice(0, REGULARS);
+  }
+  // Open right now = your 🧭 userscript saw it open in the last 5 minutes (older userscripts: the site's last answer).
+  const openNow = id => { const l = latest(id); return baz(id) === 'open' && (!usFresh() || Date.now() - l.at < REG_FRESH); };
+  const usFresh = () => verAtLeast(usVersion(), '0.5.5');
+  function renderStrip() {
+    const regs = regulars();
+    const open = regs.filter(s => openNow(s.id));
+    const waiting = regBusy || regs.some(s => baz(s.id) === 'unchecked') || (usFresh() && !regDoneAt);
+    $('regNote').textContent = 'your ' + (regs.length || '') + ' regulars' + (usFresh() && regDoneAt ? ' · checked ' + agoMs(regDoneAt) : '');
     $('strip').innerHTML = open.length
-      ? open.slice(0, 16).map(s => `<a class="reg sl${glowing(s.id) ? ' hl' : ''}" data-id="${s.id}" href="${bazaar(s.id)}" target="_blank" rel="noopener noreferrer" title="Open their bazaar">
+      ? open.map(s => `<a class="reg sl${glowing(s.id) ? ' hl' : ''}" data-id="${s.id}" href="${bazaar(s.id)}" target="_blank" rel="noopener noreferrer" title="Open their bazaar">
           <span class="seal open"><i></i></span><span class="rn">${pinned(s.id) ? '📌 ' : ''}${esc(nameOf(s.id) || 'Player ' + s.id)}</span>
           <span class="ri">${topTypes(s, 2).map(([t]) => icon(t)).join('')}</span></a>`).join('')
-      : `<span class="strip-empty">${!regs.length ? 'Your regulars appear here once purchases are synced.' : waiting ? 'Checking your regulars…' : 'None of your regulars are open right now. Press Check now for a fresh look.'}</span>`;
+      : `<span class="strip-empty">${!regs.length ? 'Your regulars appear here once purchases are synced.' : waiting ? 'Checking your regulars…' : 'None of your regulars are open right now.'}</span>`;
+  }
+  // Check your regulars with your key: when the page opens, then every 2 minutes while you use it.
+  let regBusy = false, regAt = 0, regDoneAt = 0;
+  async function checkRegulars(force) {
+    if (regBusy || !usFresh() || document.hidden || !token) return;
+    if (!force && Date.now() - regAt < REG_EVERY - 10000) return;
+    const ids = regulars().map(s => s.id);
+    if (!ids.length) return;
+    regBusy = true; regAt = Date.now();
+    try { const r = await checkViaUserscript(ids, 60000); if (takeResults(r)) regDoneAt = Date.now(); }
+    finally { regBusy = false; }
+    renderStrip();
+  }
+  // What a check by your userscript saw: used straight away (the site only stores changes, the poll brings them a bit later).
+  function takeResults(r) {
+    if (!r || !Array.isArray(r.results) || !r.results.length) return false;
+    const now = Date.now(), ids = [];
+    for (const [id, o, b, m] of r.results) { FRESH.set(Number(id), { at: now, o, b, m }); ids.push(Number(id)); }
+    patchCards(ids);
+    return true;
   }
   function renderBearings() {
     let p = 0, i = 0, s = 0, open = 0;
@@ -694,7 +730,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
 
   // Every 5 s while you use the page; once a minute after 10 minutes without a tap, scroll or key (no need to poll an idle page).
   let activeAt = Date.now(), polledAt = 0;
-  ['pointerdown', 'keydown', 'scroll', 'focus'].forEach(t => window.addEventListener(t, () => { const idle = Date.now() - activeAt > 600000; activeAt = Date.now(); if (idle && token) poll(); }, { passive: true, capture: true }));
+  ['pointerdown', 'keydown', 'scroll', 'focus'].forEach(t => window.addEventListener(t, () => { const idle = Date.now() - activeAt > 600000; activeAt = Date.now(); if (idle && token) { poll(); checkRegulars(); } }, { passive: true, capture: true }));
 
   /* ---------- check now: the bazaars on screen (sellers you bought from) ---------- */
   function idsOnScreen() {
@@ -766,6 +802,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const ids = idsOnScreen().filter(id => baz(id) === 'unchecked' || !nameOf(id)).slice(0, 30);
     if (!ids.length) return;
     const r = await checkViaUserscript(ids, 90000);
+    takeResults(r);
     if (!r.timeout) await poll();
   }
   async function checkNow() {
@@ -791,6 +828,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     else if (ids.length && hasUserscript()) {
       btn.textContent = 'Checking bazaars…';
       const r = await checkViaUserscript(ids, 90000);
+      takeResults(r);
       if (r.timeout) notes.push('still checking; the cards update as results arrive');
       else if (r.busy) notes.push('your 🧭 userscript is busy checking, try again in a moment');
       else {
@@ -1091,7 +1129,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     try { await loadData(); siteErr = null; } catch (e) { if (!token) return; siteErr = e.message; }
     await poll();
     render();
-    autoCheck();
+    autoCheck().then(() => checkRegulars(true));
     syncNotes();
     if (location.hash === '#settings') { history.replaceState({ gc: 'settings' }, '', '#settings'); showSettings(true); }
     if (started) return;
@@ -1099,7 +1137,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     setInterval(() => { if (!document.hidden && token && (Date.now() - activeAt < 600000 || Date.now() - polledAt > 60000)) poll(); }, 5000);
     setInterval(refreshGlow, 20000);
     setInterval(() => { if (!document.hidden && token) renderStatus(); }, 5000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && token) poll(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && token) { poll(); checkRegulars(); } });
+    setInterval(() => { if (!document.hidden && token && Date.now() - activeAt < 600000) checkRegulars(); else renderStrip(); }, 30000);
   }
   $('logoutBtn').addEventListener('click', async () => {
     try { await getJSON('/api/logout', { method: 'POST' }); } catch (e) { /* signed out anyway */ }
