@@ -594,7 +594,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     Object.assign(CHK, { done: p.done || 0, total: Math.max(p.total || 0, p.done || 0), changed: p.changed || 0, running: !p.finished });
     if (p.error) CHK.error = p.error;
     showCheck(); renderStrip();
-    if (p.finished) poll(); // names and anything else the site has now
+    poll(); // names found for new sellers, and anything else the site has now
   });
   // Progress next to Check now: "Checking bazaars… 40 of 300", then "Checked 300 bazaars (12 changed)".
   let chkT = null;
