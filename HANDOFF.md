@@ -65,12 +65,19 @@ Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each p
   A background round in progress stops early to make way.
 - Torn replies: code 6/7 → account gone (`missing`), code 5 / HTTP 429 → stop and post what was done, code 16 → the key lacks `bazaar`
   (`KEY_NO_BAZAAR` shown on the page via `data-gc-keyerr`; background rounds pause 30 min).
-- **Does the key allow bazaars? (0.5.3)** Save asks Torn's `key/info` (Custom keys list their selections; every other kind of key
-  includes public data such as bazaars). It used to look at the player's *own* bazaar, which Torn refused for some keys that are fine
-  for other players' bazaars, so a correct "Create the key for me" key got "can't look at bazaars". If `key/info` doesn't answer, no
-  warning (the real checks will tell). The warning is stored as `keynb` = {at, tag} in shared storage, where `tag` is a short hash
-  of the key it was about, so a new key starts clean on every page; the list page re-asks `key/info` when it finds one. With a key
-  that lacks bazaar, Save still opens the list (purchases work) and says what to tick.
+- **The key must have everything (0.5.4).** Needed: user basic, log, bazaar; torn logtypes, items (exactly what "Create the key
+  for me" ticks). `checkKey` asks Torn's `key/info` (Custom keys list their selections; Full keys have everything; Public, Minimal
+  and Limited keys can't read the log). If `key/info` doesn't answer it tries user/log, user/basic, user/1/bazaar and
+  torn/logtypes, and never blocks on a Torn hiccup (network error or rate limit = unknown). The result is kept per key as
+  `keychk` = {tag (short hash of the key), at, missing} in shared storage.
+  - **Save** checks first: anything missing → the key is not saved, the list does not open, and the box says exactly what is
+    missing ("missing bazaar under User and items under Torn"). (It used to test the player's *own* bazaar, which Torn refused for
+    some correct keys.)
+  - **Tap 🧭** opens the list only for a key that passed; a key never checked (e.g. after updating) is checked on that tap and the
+    box offers "Open my list" once it passes. Torn pages check an unchecked key in the background after 3 s.
+  - **The list page** asks the userscript (`gc:keycheck` → `data-gc-keycheck-result` {missing, text}) before showing the list,
+    and shows a "Your Torn key needs a few more permissions" screen if anything is missing.
+  - A bazaar check refused with code 16 marks `user bazaar` missing (notice on the page, background checks stop).
 - The Worker keeps a result only for sellers in that player's `usets`, writes a row only when the answer changed (`statusChanged`), takes a
   name the first time (renames after 7 days), and counts changes against the player's daily cap (5,000).
 - Weekly the userscript sends Torn's item list (`torn/items`, needs `items` ticked) to `POST /api/items`; the page uses the player's own list, else the old shared one.

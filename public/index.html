@@ -1048,7 +1048,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   }
   // The screen shown instead of the list: looking for the userscript, not installed, not set up, signed out, deleted.
   const GF = 'https://greasyfork.org/en/scripts/605140-gilded-compass';
-  function showGate(kind) {
+  function showGate(kind, text) {
     const T = {
       wait: ['Opening your compass…', '<p>Looking for the 🧭 userscript on this device…</p>', ''],
       none: ['Gilded Compass needs the 🧭 userscript',
@@ -1061,6 +1061,12 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
         `<p>The userscript is here (version ${esc(usVersion())}) but has no Torn key yet. On Torn, tap 🧭 and paste your key ("Create the key for me" makes the right one), then tap 🧭 again to come back here signed in.</p>`,
         '<a class="btn gold" href="https://www.torn.com/" target="_blank" rel="noopener noreferrer">Open Torn ↗</a> <button class="btn" data-gate="retry">I\'ve done it</button>'],
       signedout: ['Signed out', '<p>Sign in again with the key in your 🧭 userscript.</p>', '<button class="btn gold" data-gate="retry">Sign in</button>'],
+      key: ['Your Torn key needs a few more permissions',
+        `<p>${esc(text || 'Your Torn key is missing some of what Gilded Compass needs.')}</p>
+        <ol><li>On Torn, tap 🧭 (or hold it) to open its settings.</li>
+        <li>Tap "Create the key for me" and create the key on Torn (it ticks everything needed: basic, log and bazaar under User; logtypes and items under Torn).</li>
+        <li>Paste the new key in the 🧭 settings and tap Save. Your list opens once the key has everything.</li></ol>`,
+        '<a class="btn gold" href="https://www.torn.com/" target="_blank" rel="noopener noreferrer">Open Torn ↗</a> <button class="btn" data-gate="retry">I\'ve done it</button>'],
       deleted: ['Your data is deleted',
         '<p>Everything this site kept for you is gone. To stop sending purchases, remove the 🧭 userscript too; otherwise it signs in again and sends them on its next sync.</p>',
         '<button class="btn" data-gate="retry">Sign in again</button>']
@@ -1137,6 +1143,11 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
         else if (again || !token) await renewToken(); // it has a key but no sign-in yet (or you pressed Sign in)
       }
       if (!token) { showGate(again ? 'signedout' : 'setup'); return; }
+      if (verAtLeast(usVersion(), '0.5.4')) { // does the key have everything the script needs? (Torn's key/info, via the userscript)
+        const k = await bridge('gc:keycheck', 'gc:keychecked', 'data-gc-keycheck-result', 20000);
+        if (k && Array.isArray(k.missing) && k.missing.length) { showGate('key', k.text); return; }
+        if (k && k.wrong) { showGate('key', k.error); return; }
+      }
       await start();
     } finally { booting = false; }
   }

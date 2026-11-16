@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.3
+// @version      0.5.4
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -47,7 +47,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.3'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.4'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -56,7 +56,7 @@
 
   // Torn PDA keeps each website's storage apart, but its PDA_storage is shared by every page this script runs on
   // (as in Arbitrage). The few things the Gilded Compass page also needs are kept there too.
-  const SHARED = ['apikey', 'token', 'me', 'sync', 'btnpos', 'btnpos_phone', 'ckpos', 'ckat', 'itemsat', 'keynb'];
+  const SHARED = ['apikey', 'token', 'me', 'sync', 'btnpos', 'btnpos_phone', 'ckpos', 'ckat', 'itemsat', 'keychk'];
   const pda = () => (typeof PDA_storage !== 'undefined' && PDA_storage && typeof PDA_storage.get === 'function' ? PDA_storage : null);
   const cache = {};
   async function loadShared() {
@@ -124,7 +124,6 @@
   };
   const KEYURL = 'https://www.torn.com/preferences.php#tab=api?step=addNewKey&title=GildedCompass&user=basic,log,bazaar&torn=logtypes,items';
   const KEY_WRONG = 'Torn says your saved key is wrong (it may have been deleted or replaced on Torn). Paste your current key below and tap Save.';
-  const KEY_NO_BAZAAR = 'Your key can\'t look at bazaars, so open/closed can\'t be checked. On Torn, make a key with "bazaar" ticked under User ("Create the key for me" in the 🧭 settings ticks it), then paste it there.';
 
   /* ===================== the site ===================== */
   function siteCall(method, path, body, token) {
@@ -385,39 +384,60 @@
       keyLooksRight: keyShape(cfg.key()), keyCopiesMatch: sget('apikey', '') === sgetLocal('apikey', ''), keyFixedAt: state.keyFixedAt || null, lastErrorAt: state.lastErrorAt || null,
       logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
       oldest: state.oldest, resume: state.resume ? Object.assign({}, state.resume, { seen: undefined }) : null, lastError: state.lastError,
-      lastCheckAt: state.lastCheckAt || null, lastCheckError: state.lastCheckError || null, keyNoBazaar: !!noBazaarAt(),
+      lastCheckAt: state.lastCheckAt || null, lastCheckError: state.lastCheckError || null, keyMissing: keyMissing(),
       rawSamples: state.rawSamples, badSamples: state.badSamples, parsedSample: state.rawSamples.map(parseBuy) };
   }
 
   /* ===================== what your key may do ===================== */
-  // Torn's key/info: { type: 'Custom' | 'Full' | ..., user: [selections] }, or null when Torn did not say.
-  async function keyInfo(key) {
+  // Everything the script needs from your key ("Create the key for me" ticks exactly these).
+  const NEEDS = [['user', 'basic'], ['user', 'log'], ['user', 'bazaar'], ['torn', 'logtypes'], ['torn', 'items']];
+  const keyTag = k => { let h = 2166136261; for (const c of String(k || '')) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); };
+  // The last check of a key, shared by every page: { tag (a short hash of the key, never the key), at, missing: ['user bazaar', ...] }.
+  function keyRecord(key) { const r = sget('keychk', null); return r && r.tag === keyTag(key || cfg.key()) && Array.isArray(r.missing) ? r : null; }
+  const keyMissing = key => { const r = keyRecord(key); return r ? r.missing : null; }; // null = not checked yet
+  function setMissing(item, on) {
+    const r = keyRecord() || { tag: keyTag(cfg.key()), missing: [] };
+    if (on === r.missing.includes(item)) return;
+    sset('keychk', { tag: r.tag, at: Date.now(), missing: on ? r.missing.concat(item) : r.missing.filter(x => x !== item) });
+    showKeyErr();
+  }
+  // "Your Torn key is missing bazaar under User and items under Torn. …"
+  function missingText(m, here) {
+    const part = sec => m.filter(x => x.startsWith(sec + ' ')).map(x => x.slice(sec.length + 1));
+    const parts = [];
+    if (part('user').length) parts.push(part('user').join(', ') + ' under User');
+    if (part('torn').length) parts.push(part('torn').join(', ') + ' under Torn');
+    return `Your Torn key is missing ${parts.join(' and ')}. Tap "Create the key for me", create that key on Torn, then paste it `
+      + (here ? 'here and tap Save.' : 'in the 🧭 settings on Torn (tap or hold the 🧭 button) and tap Save.');
+  }
+  // Checks a key for everything in NEEDS. Returns { missing: [...], known } (known = false: Torn could not say right now).
+  // Throws for a wrong key (Torn code 2).
+  async function checkKey(key) {
+    key = key || cfg.key();
+    let missing = null;
     try {
       const j = await apiUrl('https://api.torn.com/v2/key/info', key);
       const i = (j && (j.info || j)) || {}, acc = i.access || {}, sel = i.selections || {};
-      const type = String(acc.type || '');
-      if (!type && !Array.isArray(sel.user)) return null;
-      return { type, user: Array.isArray(sel.user) ? sel.user.map(String) : [] };
-    } catch (e) { return null; }
-  }
-  // Can this key look at other players' bazaars? true / false, or null when Torn did not say. Only Custom keys can leave
-  // "bazaar" out; every other kind includes public information such as bazaars.
-  async function keySeesBazaars(key) {
-    const k = await keyInfo(key);
-    if (!k) return null;
-    return /custom/i.test(k.type) ? k.user.includes('bazaar') : true;
-  }
-  // "This key can't look at bazaars" is remembered for that key only (a new key starts clean) and shared by every page.
-  const keyTag = k => { let h = 2166136261; for (const c of String(k || '')) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); };
-  function noBazaarAt() { const f = sget('keynb', null); return f && f.tag === keyTag(cfg.key()) ? f.at || 0 : 0; }
-  function setNoBazaar(on, key) {
-    if (!on && !sget('keynb', null)) { showKeyErr(); return; }
-    sset('keynb', on ? { at: Date.now(), tag: keyTag(key || cfg.key()) } : null);
+      const type = String(acc.type || ''), level = Number(acc.level) || 0;
+      if (/custom/i.test(type)) missing = NEEDS.filter(([sec, n]) => !(Array.isArray(sel[sec]) && sel[sec].map(String).includes(n))).map(x => x.join(' '));
+      else if (/full/i.test(type) || level >= 4) missing = [];
+      else if (type || level) missing = ['user log']; // Public, Minimal and Limited keys can't read your log
+    } catch (e) { if (e.code === 2) throw e; }
+    if (missing === null) { // Torn's key/info did not answer: try the parts that are quick to try
+      missing = [];
+      for (const [path, item] of [['user/log?limit=1', 'user log'], ['user/basic', 'user basic'], ['user/1/bazaar', 'user bazaar'], ['torn/logtypes', 'torn logtypes']]) {
+        try { await apiUrl('https://api.torn.com/v2/' + path, key); }
+        catch (e) { if (e.code === 2) throw e; if (e.code === 16) missing.push(item); else if (!e.code || e.rate) return { missing, known: false }; }
+      }
+    }
+    sset('keychk', { tag: keyTag(key), at: Date.now(), missing });
     showKeyErr();
+    return { missing, known: true };
   }
   function showKeyErr() {
     const de = typeof document !== 'undefined' && document.documentElement;
-    if (de && de.hasAttribute('data-gc-userscript')) de.setAttribute('data-gc-keyerr', noBazaarAt() ? KEY_NO_BAZAAR : '');
+    const m = keyMissing();
+    if (de && de.hasAttribute('data-gc-userscript')) de.setAttribute('data-gc-keyerr', m && m.length ? missingText(m, false) : '');
   }
 
   /* ===================== bazaar checks with your own key ===================== */
@@ -478,7 +498,7 @@
     const results = [], names = [];
     let error = null, changed = 0;
     const tornError = e => {
-      if (e.code === 16) { setNoBazaar(true); return Object.assign(new Error(KEY_NO_BAZAAR), { stop: true }); }
+      if (e.code === 16) { setMissing('user bazaar', true); return Object.assign(new Error(missingText(['user bazaar'], false)), { stop: true }); }
       if (e.rate) return new Error('Torn says your key is busy right now; the rest are checked a bit later.');
       if (e.code === 2) state.needsSetup = true;
       return e;
@@ -491,7 +511,7 @@
     } catch (e) { error = hideKey(e.message || e); }
     try {
       if (results.length) {
-        if (!error && noBazaarAt()) setNoBazaar(false);
+        if (!error && (keyMissing() || []).includes('user bazaar')) setMissing('user bazaar', false); // it can after all
         const j = await postChecks({ results });
         changed += j.changed || 0;
         // names come along the first time a seller is checked (a few per round, so your key stays unhurried)
@@ -563,13 +583,13 @@
     p.innerHTML = `<h3><span>🧭 Gilded Compass <small style="color:#9aa3b5;font-weight:400">v${VERSION}</small></span><button data-act="close">✕</button></h3>
       <p class="gc-note" style="margin-top:0">Ranks the bazaars you buy from. It reads only your <b>Bazaar buy</b> log, and only you can see your list.</p>
       ${me ? `<p class="gc-note">Signed in as <b style="color:#ece6d6">${esc(me.name || '')}</b> [${esc(me.uid)}]</p>` : ''}
-      <label>Torn API key (Custom: log and bazaar ticked)<input id="gc-key" type="password" autocomplete="off" placeholder="${usingPda ? 'using Torn PDA\'s key' : sget('apikey', '') ? 'saved (leave empty to keep)' : 'paste the new key'}"></label>
+      <label>Torn API key (make it with "Create the key for me")<input id="gc-key" type="password" autocomplete="off" placeholder="${usingPda ? 'using Torn PDA\'s key' : sget('apikey', '') ? 'saved (leave empty to keep)' : 'paste the new key'}"></label>
       <a class="gc-a" href="${KEYURL}" target="_blank" rel="noopener">Create the key for me ↗</a>
       ${IN_PDA && !usingPda ? '<button data-act="usepda">Use Torn PDA\'s key</button>' : ''}
       <div id="gc-msg">${msg.text ? `<div class="${msg.ok ? 'gc-ok' : 'gc-err'}">${esc(msg.text)}</div>` : state.lastError ? `<div class="gc-err">Last sync${state.lastErrorAt ? ' (' + esc(new Date(state.lastErrorAt).toLocaleString()) + ')' : ''}: ${esc(state.lastError)}</div>` : ''}</div>
       <button data-act="save" class="gc-gold">Save and sign in</button>
       <p class="gc-note" id="gc-status">${statusText()}</p>
-      <p class="gc-note">How far back to look, debug sample and deleting your data: <b>⚙</b> on your Gilded Compass page.</p>
+      <p class="gc-note">Removed sellers, debug sample and deleting your data: <b>⚙</b> on your Gilded Compass page.</p>
       <p class="gc-note">Read-only: never acts in the game. Your key stays on this device. It reads your bazaar purchases and checks whether those sellers' bazaars are open (public info, shared with the site). It goes to api.torn.com, and once to the Gilded Compass site to confirm who you are (not stored there).</p>`;
   }
   function statusText() {
@@ -606,20 +626,19 @@
       if (!IN_PDA) { try { tab = window.open('', '_blank'); if (tab) tab.document.write('<p style="font:16px system-ui;padding:24px;color:#9a7412">Signing you in to Gilded Compass…</p>'); } catch (e) { /* blocked */ } }
       el.disabled = true; el.textContent = 'Checking…';
       try {
-        await api('user/log', { limit: 1 }, key); // the log is the part that needs the right access
+        const { missing } = await checkKey(key); // everything the script needs? (Torn's key/info)
+        if (missing.length) { // not this key: nothing is saved and the list stays closed
+          if (tab && !tab.closed) { try { tab.close(); } catch (x) { /* ignore */ } }
+          setMsg(missingText(missing, true), false);
+          el.disabled = false; el.textContent = 'Save and sign in';
+          return;
+        }
         await signIn(key);
-        // can it also look at other players' bazaars? Torn's key/info says (if Torn doesn't, the checks themselves will tell)
-        const noBazaar = (await keySeesBazaars(key)) === false;
         if (key !== (IN_PDA ? PDA_KEY : '')) sset('apikey', key);
-        setNoBazaar(noBazaar, key);
         state.needsSetup = false; state.lastError = null; save();
         const me = sget('me', {});
         run('tap'); // starts sending your purchases; your list fills in as they arrive
-        if (noBazaar) { // purchases still work: open the list, and say what to fix
-          const opened = openSite(tab);
-          setMsg(`Signed in${me.name ? ' as ' + me.name : ''}${opened ? ' and your list is opening' : ''}, but: ` + KEY_NO_BAZAAR, false);
-          if (!opened) showOpenLink(`Signed in${me.name ? ' as ' + me.name : ''}, but: ` + KEY_NO_BAZAAR);
-        } else if (openSite(tab)) {
+        if (openSite(tab)) {
           setMsg(`All good${me.name ? ', ' + me.name : ''}. Your list is opening; it fills in while your purchases are sent.`, true);
           setTimeout(() => { const p = document.getElementById('gc-setup'); if (p) p.hidden = true; }, 2500);
         } else showOpenLink(`All good${me.name ? ', ' + me.name : ''}. Your purchases are being sent.`);
@@ -645,9 +664,11 @@
   async function recheckKey() {
     setMsg('Checking your key…', true);
     try {
-      await api('user/log', { limit: 1 });
+      try { await api('user/log', { limit: 1 }); } catch (e) { if (e.code !== 16) throw e; } // (also finds the working copy of the key)
+      const { missing } = await checkKey();
+      if (missing.length) { state.needsSetup = true; save(); setMsg(missingText(missing, true), false); return; }
       state.needsSetup = false; state.lastError = null; save();
-      showOpenLink('Your key works ✓ (that error was from earlier).');
+      showOpenLink('Your key has everything Gilded Compass needs ✓');
       run('tap');
     } catch (e) {
       state.lastError = hideKey(e.message || e); state.lastErrorAt = Date.now(); save();
@@ -664,7 +685,8 @@
   }
   function tap() {
     if (!cfg.ready()) { openSetup(); return; }
-    if (state.needsSetup) { openSetup(); recheckKey(); return; }
+    const m = keyMissing();
+    if (state.needsSetup || !m || m.length) { openSetup(); recheckKey(); return; } // the key must have everything first
     if (!openSite()) {
       if (IN_PDA) showOpenLink('Tap below to open your list.');
       else location.href = siteUrl(); // pop-up blocked: open it here instead
@@ -755,7 +777,14 @@
     de.setAttribute('data-gc-userscript', VERSION);
     if (state.lastCheckAt) de.setAttribute('data-gc-checkedat', String(state.lastCheckAt));
     showKeyErr();
-    if (noBazaarAt() && cfg.ready()) keySeesBazaars(cfg.key()).then(ok => { if (ok) setNoBazaar(false); }); // an old warning: ask Torn again
+    // the page asks whether your key has everything it needs before it shows your list (checked fresh, one call to Torn)
+    document.addEventListener('gc:keycheck', async () => {
+      let res;
+      try { res = cfg.ready() ? await checkKey() : { missing: [], known: false, nokey: true }; } catch (e) { res = { error: hideKey(e.message || e), wrong: e.code === 2 }; }
+      if (res.missing && res.missing.length) res.text = missingText(res.missing, false).split('. ')[0] + '.'; // just what is missing
+      de.setAttribute('data-gc-keycheck-result', JSON.stringify(res));
+      document.dispatchEvent(new Event('gc:keychecked'));
+    });
     // the page signs in through this script (it holds your key): a fresh sign-in when the page's has expired
     document.addEventListener('gc:signin', async () => {
       let res;
@@ -777,7 +806,7 @@
     });
     // while this page is open: a few of your sellers every 2 minutes, in turn
     const bg = async () => {
-      if (document.hidden || !cfg.ready() || state.needsSetup || (noBazaarAt() && Date.now() - noBazaarAt() < 30 * 60000)) return;
+      if (document.hidden || !cfg.ready() || state.needsSetup || (keyMissing() || []).length) return;
       try { await checkBazaars(await nextToCheck(12), false); } catch (e) { /* next time */ }
     };
     setTimeout(bg, 60000); setInterval(bg, 120000); // the page asks for a quick check of the cards on screen when it opens
@@ -805,10 +834,11 @@
     // while Torn is open: a few of your sellers' bazaars every 10 minutes, with your key
     const bg = async () => {
       if (document.hidden || !cfg.ready() || state.needsSetup || Date.now() - Math.max(state.lastCheckAt || 0, sget('ckat', 0)) < 10 * 60000) return;
-      if (noBazaarAt() && Date.now() - noBazaarAt() < 30 * 60000) return; // this key can't look at bazaars: wait for a new one
+      if ((keyMissing() || []).length) return; // the key is missing something: wait for a new one
       try { await checkBazaars(await nextToCheck(8), false); } catch (e) { /* next time */ }
     };
     setTimeout(bg, 20000); setInterval(bg, 60000);
+    setTimeout(() => { if (cfg.ready() && !keyMissing()) checkKey().catch(() => {}); }, 3000);
   }
 
   if (typeof module !== 'undefined') {
@@ -817,7 +847,7 @@
       wired: { tap, openSite, siteUrl, showOpenLink, openSetup, renderSetup, onSetup, setMsg, setStatus, statusText, run, readRange,
         sendToSite, siteMe, signIn, token, debugSample, initSite, init, mount, attachPointer, placeBtn, stepAside, setBtn,
         checkBazaars, paced, nextToCheck, mySellers, postChecks, itemsIfDue, parseBazaar, parseName, recoverKey, recheckKey,
-        keyInfo, keySeesBazaars, noBazaarAt, setNoBazaar, showKeyErr } };
+        checkKey, keyMissing, setMissing, missingText, showKeyErr } };
   }
   if (typeof document !== 'undefined' && !globalThis.__GC_TEST) init();
 })();
