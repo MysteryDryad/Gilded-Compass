@@ -64,7 +64,13 @@ Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each p
 - **Check now**: reads the log first (`gc:sync`), then checks the new sellers and the ones on screen (≤ 40, 4 at a time, plus ≤ 16 names) via `gc:check`.
   A background round in progress stops early to make way.
 - Torn replies: code 6/7 → account gone (`missing`), code 5 / HTTP 429 → stop and post what was done, code 16 → the key lacks `bazaar`
-  (`KEY_NO_BAZAAR` shown on the page via `data-gc-keyerr`; background rounds pause 30 min; setup tests bazaar access on the player's own bazaar).
+  (`KEY_NO_BAZAAR` shown on the page via `data-gc-keyerr`; background rounds pause 30 min).
+- **Does the key allow bazaars? (0.5.3)** Save asks Torn's `key/info` (Custom keys list their selections; every other kind of key
+  includes public data such as bazaars). It used to look at the player's *own* bazaar, which Torn refused for some keys that are fine
+  for other players' bazaars, so a correct "Create the key for me" key got "can't look at bazaars". If `key/info` doesn't answer, no
+  warning (the real checks will tell). The warning is stored as `keynb` = {at, tag} in shared storage, where `tag` is a short hash
+  of the key it was about, so a new key starts clean on every page; the list page re-asks `key/info` when it finds one. With a key
+  that lacks bazaar, Save still opens the list (purchases work) and says what to tick.
 - The Worker keeps a result only for sellers in that player's `usets`, writes a row only when the answer changed (`statusChanged`), takes a
   name the first time (renames after 7 days), and counts changes against the player's daily cap (5,000).
 - Weekly the userscript sends Torn's item list (`torn/items`, needs `items` ticked) to `POST /api/items`; the page uses the player's own list, else the old shared one.
