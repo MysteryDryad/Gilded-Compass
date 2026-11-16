@@ -453,7 +453,9 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function baz(id) {
     const l = latest(id);
     if (!l) return 'unchecked';
-    return l.m || !l.b ? 'none' : l.o ? 'open' : 'closed';
+    if (l.m) return 'none'; // account gone
+    if (l.o) return 'open';
+    return l.b ? 'closed' : 'none';
   }
   const SEAL = { open: 'Open', closed: 'Closed', unchecked: 'Checking' };
   function seal(id) {
