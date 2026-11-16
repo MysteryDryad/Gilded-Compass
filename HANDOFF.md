@@ -56,18 +56,20 @@ Reading logs needs a **Custom key with log ticked** (or Full). Public and Limite
 Signing in to the site works with any key, Public included (only `user/basic` is used).
 
 ## Bazaar checks (the player's own key, in the userscript)
-Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each player's userscript checks **their own sellers** with **their own key**:
-- **Page open**: right after it loads, a quick check of the cards on screen that were never checked or have no name (≤ 30, 4 at a time); then every
-  2 minutes a background round of 12 sellers (one every 1.5 s) plus up to 8 names. Rounds take turns through the player's top 100 (60%) and the
-  rest of their sellers (cursor `ckpos`, shared between pages); the list comes from `GET /api/sellers` (cached 30 min, refreshed after new purchases).
-- **Torn open**: one round of 8 every 10 minutes (`ckat`, shared, so several tabs don't multiply it).
-- **Check now**: reads the log first (`gc:sync`), then checks the new sellers and the ones on screen (≤ 40, 4 at a time, plus ≤ 16 names) via `gc:check`.
-- **Regulars (0.5.5)**: 15 in all (pinned first, then most bought from). The page asks the userscript to check all 15 when it
-  opens and every 2 minutes while it is in use (`gc:check`, which now also returns `results` [id, open, has bazaar, gone] as seen
-  just now). A regular is shown under "Open now" only if the newest answer (the page's own check, or a change the site heard of
-  from any player) is "open" and less than 5 minutes old; the header says "checked N ago". Seals on the cards also use whichever
-  answer is newer (the page's own check wins unless the site heard of a change 30 s or more later).
-  A background round in progress stops early to make way.
+Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each player's userscript checks **their own sellers** with
+**their own key**, and since 0.5.6 **only at two moments** (nothing on a timer, to spare the key's 100 calls a minute):
+- **When the list page opens**: all the player's sellers (`gc:checkall` with {ids, fast}): the regulars and the cards on screen
+  first, 4 at a time; then everyone else 25 per batch, one call every 1.5 s (about 40 a minute), with names for new sellers.
+- **Check now**: reads the log first (`gc:sync`), then the same check-all with new sellers first. Pressed during a check, its
+  sellers go to the front and the slow batch in progress stops early (skipped sellers go to the end, once).
+- Each batch goes to the site (`POST /api/bazaar`) and to the page (`gc:checkpart`: {results, done, total, changed, finished,
+  error}); the page applies results at once and shows "Checking bazaars… 40 of 300", then "Checked 300 bazaars (12 changed)".
+- Torn says slow down (code 5 / HTTP 429): wait a minute and carry on (5 times at most). A key that can't look at bazaars
+  (code 16): stop. Other errors: retry the batch twice, 5 s apart.
+- No background rounds any more (the old every-2-minutes on the list page and every-10-minutes on Torn pages are gone);
+  `nextToCheck`/`ckpos` are unused. Older pages can still use `gc:check` (≤ 40 at once).
+- **Regulars** (15: pinned first, then most bought from): "Open now" shows the ones whose newest answer is "open" from a check
+  made from this page (or newer news from the site); the header says "checked N ago" so the player knows when to press Check now.
 - Torn replies: code 6/7 → account gone (`missing`), code 5 / HTTP 429 → stop and post what was done, code 16 → the key lacks `bazaar`
   (`KEY_NO_BAZAAR` shown on the page via `data-gc-keyerr`; background rounds pause 30 min).
 - **The key must have everything (0.5.4).** Needed: user basic, log, bazaar; torn logtypes, items (exactly what "Create the key
