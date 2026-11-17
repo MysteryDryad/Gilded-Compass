@@ -673,7 +673,10 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   }
   // Status changes: update seals and names in place; only re-render when filters or sorting depend on them.
   function patchCards(changed) {
-    if (st.baz !== 'any' || ['open', 'name'].includes(st.sort) || st.q || changed.some(id => baz(id) === 'none')) { renderSoon(); return; }
+    // re-render when the list itself changes: a seller now without a bazaar leaves it, and one that has a bazaar again (or was
+    // never shown) joins it; otherwise just update the cards in place
+    const inList = new Set(list.map(x => x.s.id)), mine = id => DATA.sellers.some(s => s.id === id);
+    if (st.baz !== 'any' || ['open', 'name'].includes(st.sort) || st.q || changed.some(id => baz(id) === 'none' ? inList.has(id) : !inList.has(id) && mine(id))) { renderSoon(); return; }
     for (const id of changed) {
       const c = document.querySelector(`.cardx[data-id="${id}"]`); if (!c) continue;
       c.querySelector('.seal').outerHTML = seal(id);
