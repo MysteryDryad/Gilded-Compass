@@ -20,13 +20,13 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS usets (uid INTEGER PRIMARY KEY, sellers TEXT NOT NULL)',
   // each player's top 100 sellers (worked out by their page); their userscript checks these more often
   'CREATE TABLE IF NOT EXISTS tops (uid INTEGER NOT NULL, seller INTEGER NOT NULL, PRIMARY KEY (uid, seller)) WITHOUT ROWID',
-  'CREATE TABLE IF NOT EXISTS status (id INTEGER PRIMARY KEY, is_open INTEGER, has_bazaar INTEGER, missing INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL DEFAULT 0, top INTEGER NOT NULL DEFAULT 0, kind INTEGER NOT NULL DEFAULT 2, name TEXT, name_t INTEGER NOT NULL DEFAULT 0, u INTEGER NOT NULL DEFAULT 0)',
+  'CREATE TABLE IF NOT EXISTS status (id INTEGER PRIMARY KEY, is_open INTEGER, has_bazaar INTEGER, missing INTEGER NOT NULL DEFAULT 0, t INTEGER NOT NULL DEFAULT 0, top INTEGER NOT NULL DEFAULT 0, kind INTEGER NOT NULL DEFAULT 2, name TEXT, name_t INTEGER NOT NULL DEFAULT 0, u INTEGER NOT NULL DEFAULT 0, ck INTEGER NOT NULL DEFAULT 0)',
   'CREATE INDEX IF NOT EXISTS status_u ON status(u)',
   'CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)',
   // per player and seller: pinned / has a note (only that a note exists; the text stays on their device) = never dropped;
   // hide = when the player removed it (0 = not removed): off their list until they buy from it again or restore it
   'CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, hide INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID',
-  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '9')"
+  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '10')"
 ];
 const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owner jailed, inactive, too low, paused
 const SESSION_DAYS = 180;
@@ -34,7 +34,8 @@ const TOP_TIER = 100;
 // One player per day (generous for a real first sync; stops one person draining the shared allowance).
 // Workers Paid (since 2026-11-13) includes 50 million rows written a month; these caps keep one player's worst day near
 // 150,000 written rows (a few cents), while a real first sync of a big history (26,000 purchases, 4,000 sellers) fits easily.
-const DAY_CAP = { purchases: 300000, sellers: 40000, uploads: 2000, tops: 200, changes: 20000, items: 5, keeps: 3000 };
+const DAY_CAP = { purchases: 300000, sellers: 40000, uploads: 2000, tops: 200, changes: 20000, items: 5, keeps: 3000, cks: 100000 };
+const CK_EVERY = 150; // a seller's "last checked" time is written at most every 2.5 minutes (so a 5-minute "recent" is always true)
 const KEEP_MAX = 3000; // pinned, noted or removed sellers per player
 const HIDDEN = '(SELECT seller FROM keeps WHERE uid = ?1 AND hide > 0)'; // the player's removed sellers (?1 = uid)
 // Everyone's list covers the last 60 days of bazaar purchases: older purchases are refused and deleted, and a seller not
@@ -65,7 +66,8 @@ async function withSchema(env, fn) {
 // v7: pinned sellers and sellers with a note (keeps) stay on the list for good.
 // v8: a player can remove a seller from their list (keeps.hide).
 // v9: keeps.hide holds when it was removed, so a later purchase from that seller brings it back.
-const SCHEMA_VERSION = 9;
+// v10: status.ck = when any player last checked the seller (the first check counts for every player who buys there).
+const SCHEMA_VERSION = 10;
 const MIGRATIONS = {
   2: ['CREATE INDEX IF NOT EXISTS status_kind ON status(kind)', 'DROP INDEX IF EXISTS status_kind_t', 'DROP INDEX IF EXISTS status_name'],
   3: ['ALTER TABLE status ADD COLUMN u INTEGER NOT NULL DEFAULT 0', 'UPDATE status SET u = MAX(t, name_t) WHERE u = 0 AND (t > 0 OR name_t > 0)',
@@ -85,7 +87,8 @@ const MIGRATIONS = {
       "DELETE FROM meta WHERE k LIKE 'set:%'"],
   7: ['CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID'],
   8: ['ALTER TABLE keeps ADD COLUMN hide INTEGER NOT NULL DEFAULT 0'],
-  9: ["UPDATE keeps SET hide = CAST(strftime('%s', 'now') AS INTEGER) WHERE hide = 1"]
+  9: ["UPDATE keeps SET hide = CAST(strftime('%s', 'now') AS INTEGER) WHERE hide = 1"],
+  10: ['ALTER TABLE status ADD COLUMN ck INTEGER NOT NULL DEFAULT 0']
 };
 let migrated = false;
 async function migrate(env) {
@@ -263,7 +266,7 @@ async function getStatus(env, me, since) {
 async function dayCounter(env, uid) {
   let q = {}; try { q = JSON.parse(firstV(await metaGet(env, 'day:' + uid).run()) || '{}'); } catch (e) { /* start over */ }
   const d = Math.floor(now() / 86400);
-  return q.d === d ? q : { d, uploads: 0, purchases: 0, sellers: 0, tops: 0, changes: 0, items: 0, keeps: 0 };
+  return q.d === d ? q : { d, uploads: 0, purchases: 0, sellers: 0, tops: 0, changes: 0, items: 0, keeps: 0, cks: 0 };
 }
 const capMsg = what => `Daily limit for one player reached (${what}). The rest is sent automatically after midnight UTC.`;
 
@@ -440,13 +443,33 @@ async function postBazaar(req, env, me) {
   const changes = out.changed.length + out.names.length;
   const named = new Set(names.map(n => n[0]));
   const needName = results.map(r => r[0]).filter(id => old.has(id) && !old.get(id).name_t && !named.has(id));
-  if (changes) {
+  const checked = out.bazaar.map(r => r[0]);
+  if (changes || checked.length) {
     const q = await dayCounter(env, me.uid);
     if ((q.changes || 0) + changes > DAY_CAP.changes) return json({ error: capMsg('bazaar changes'), changed: 0, needName }, 429);
     q.changes = (q.changes || 0) + changes;
-    await env.DB.batch(st.concat(metaSet(env, 'day:' + me.uid, JSON.stringify(q))));
+    // when each seller was last checked by anyone: other players' userscripts skip it for a few minutes and use this answer
+    if (checked.length && (q.cks || 0) + checked.length <= DAY_CAP.cks) {
+      q.cks = (q.cks || 0) + checked.length;
+      st.push(env.DB.prepare('UPDATE status SET ck = ?1 WHERE id IN (SELECT value FROM json_each(?2)) AND ck < ?3').bind(t, JSON.stringify(checked), t - CK_EVERY));
+    }
+    if (st.length) await env.DB.batch(st.concat(metaSet(env, 'day:' + me.uid, JSON.stringify(q))));
   }
   return json({ ok: true, checked: out.bazaar.length, changed: changes, needName });
+}
+// "Has anyone checked these lately?" For each of your sellers someone has checked: [id, is_open, has_bazaar, missing, ck]
+// (ck = when, in the site's seconds; `now` too). The userscript skips the ones checked recently enough and uses this answer.
+async function postFresh(req, env, me) {
+  if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
+  let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
+  const ids = validIds(body && body.ids, 100);
+  if (!ids) return json({ error: 'ids must be up to 100 player ids' }, 400);
+  const [set, rows] = await env.DB.batch([
+    env.DB.prepare('SELECT sellers AS v FROM usets WHERE uid = ?1').bind(me.uid),
+    env.DB.prepare('SELECT id, is_open, has_bazaar, missing, ck FROM status WHERE id IN (SELECT value FROM json_each(?1)) AND ck > 0').bind(JSON.stringify(ids))
+  ]);
+  const mine = new Set(JSON.parse(firstV(set) || '[]'));
+  return json({ now: now(), rows: rows.results.filter(r => mine.has(r.id)).map(r => [r.id, r.is_open, r.has_bazaar, r.missing, r.ck]) });
 }
 // Torn's item list (names and types) as fetched by the player's userscript, kept for that player only.
 async function postItems(req, env, me) {
@@ -507,6 +530,7 @@ async function handle(req, env, url, p, m) {
     if (p === '/api/settings' && m === 'POST') return json(SETTINGS); // nothing to choose any more (history is 60 days for everyone)
     if (p === '/api/sellers' && m === 'GET') return getSellers(env, me);
     if (p === '/api/bazaar' && m === 'POST') return postBazaar(req.clone(), env, me);
+    if (p === '/api/fresh' && m === 'POST') return postFresh(req.clone(), env, me);
     if (p === '/api/items' && m === 'POST') return postItems(req.clone(), env, me);
     if (p === '/api/keep' && m === 'POST') return postKeep(req.clone(), env, me);
     return json({ error: 'Not found' }, 404);

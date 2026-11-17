@@ -57,19 +57,26 @@ Signing in to the site works with any key, Public included (only `user/basic` is
 
 ## Bazaar checks (the player's own key, in the userscript)
 Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each player's userscript checks **their own sellers** with
-**their own key**, and since 0.5.6 **only at two moments** (nothing on a timer, to spare the key's 100 calls a minute):
-- **When the list page opens**: all the player's sellers (`gc:checkall` with {ids, fast}): the regulars and the cards on screen
-  first, 4 at a time; then everyone else 25 per batch, one call every 1.5 s (about 40 a minute), with names for new sellers.
-- **Check now**: reads the log first (`gc:sync`), then the same check-all with new sellers first. Pressed during a check, its
-  sellers go to the front and the slow batch in progress stops early (skipped sellers go to the end, once).
-- Each batch goes to the site (`POST /api/bazaar`) and to the page (`gc:checkpart`: {results, done, total, changed, finished,
-  error}); the page applies results at once and shows "Checking bazaars… 40 of 300", then "Checked 300 bazaars (12 changed)".
+**their own key**, only from the list page and never on a timer (0.5.7):
+- **When the list opens**: the 15 regulars and the cards shown (the first 100), then up to 30 hidden sellers (no bazaar last time)
+  that nobody has checked for a day, in case they opened one. **Cards shown later** (Show more, a filter, a search) are checked
+  once, shortly after they appear (`CHECKED` remembers what this visit already asked for).
+- **Check now**: reads the log (`gc:sync`), then new sellers, the regulars and all the cards shown.
+- **The first check counts for every player** (schema v10, `status.ck` = when any player last checked the seller, written at most
+  every 2.5 minutes per seller, `CK_EVERY`; capped at 100,000 per player per day). Before each batch the userscript asks
+  `POST /api/fresh {ids}` (→ `{now, rows: [[id, open, has bazaar, gone, ck]]}`, own sellers only) and skips the ones checked
+  within 5 minutes (opening, Show more) or 1 minute (Check now), using that answer instead (the page shows "N already checked
+  by other players").
+- Requests: `gc:checkall` with `data-gc-checkall` = {ids, fast, within, later}: the first `fast` go 4 at a time, the rest 25 per
+  batch at one call every 1.5 s (about 40 a minute), with names for new sellers; a request goes to the front (or the end with
+  `later`) of a check in progress, and a slow batch in progress stops early for it.
+- Each batch goes to the site (`POST /api/bazaar`) and to the page (`gc:checkpart`: {results (each [id, open, has bazaar, gone,
+  ck?]), done, total, changed, shared, finished, error}); the page applies results at once, refreshes from the site, and shows
+  "Checking bazaars… 40 of 115", then "Checked 115 bazaars (40 already checked by other players, 12 changed)".
 - Torn says slow down (code 5 / HTTP 429): wait a minute and carry on (5 times at most). A key that can't look at bazaars
   (code 16): stop. Other errors: retry the batch twice, 5 s apart.
-- No background rounds any more (the old every-2-minutes on the list page and every-10-minutes on Torn pages are gone);
-  `nextToCheck`/`ckpos` are unused. Older pages can still use `gc:check` (≤ 40 at once).
 - **Regulars** (15: pinned first, then most bought from): "Open now" shows the ones whose newest answer is "open" from a check
-  made from this page (or newer news from the site); the header says "checked N ago" so the player knows when to press Check now.
+  this visit asked for (its own or another player's), or newer news from the site; the header says "checked N ago" (the oldest).
 - Torn replies: code 6/7 → account gone (`missing`), code 5 / HTTP 429 → stop and post what was done, code 16 → the key lacks `bazaar`
   (`KEY_NO_BAZAAR` shown on the page via `data-gc-keyerr`; background rounds pause 30 min).
 - **The key must have everything (0.5.4).** Needed: user basic, log, bazaar; torn logtypes, items (exactly what "Create the key

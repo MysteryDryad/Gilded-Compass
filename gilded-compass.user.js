@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.6
+// @version      0.5.7
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -29,9 +29,10 @@
  * - On the Gilded Compass page, "Check now" asks this script to read your log for new purchases first (no button there).
  * - In the background (when you tap 🧭, and every 15 minutes while Torn is open) it reads YOUR new "Bazaar buy"
  *   log entries (bazaar purchases only) and sends them to the site, where only you can see them.
- * - It checks whether the bazaars of sellers you bought from are open (and their names), with YOUR key, only when you open
- *   your Gilded Compass list and when you press Check now: all of your sellers, the ones that matter most first, at about
- *   40 a minute (your key's 100 calls a minute are shared with Torn PDA and your other scripts). It waits when Torn says so.
+ * - It checks whether the bazaars of sellers you bought from are open (and their names), with YOUR key, only from your Gilded
+ *   Compass list: your regulars and the cards shown when it opens, more cards when you show more, and again when you press
+ *   Check now (about 40 a minute after the first few; your key's 100 calls a minute are shared with Torn PDA and your other
+ *   scripts). A seller another player checked in the last few minutes is not checked again: their answer is used.
  *   These are public Torn facts; the site keeps them and shares them with other players who buy from the same sellers.
  *
  * Privacy and safety
@@ -47,7 +48,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.6'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.7'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -532,33 +533,57 @@
     return { checked: results.length, named: names.length, changed, error, kind, results }; // results: [id, open, has bazaar, gone] as seen just now
   }
   // Check all: the sellers the page asks for, in its order, 25 at a time. The first `fast` of them go 4 at a time (your
-  // regulars, new sellers and the cards on screen), the rest one every 1.5 s (about 40 a minute). Each batch goes to the site
-  // and to the page as soon as it is done. A new request (Check now) puts its sellers first. When Torn says to slow down it
-  // waits a minute and carries on (5 times at most).
+  // regulars, new sellers and the first cards), the rest one every 1.5 s (about 40 a minute). Before each batch the site is
+  // asked which of them any player checked in the last `within` seconds: those answers are used instead (the first check counts
+  // for everyone). Each batch goes to the site and to the page as soon as it is done. A new request goes first (Check now), or
+  // last with `later`. When Torn says to slow down it waits a minute and carries on (5 times at most).
   let allJob = null;
-  function checkAll(ids, fast) {
+  function checkAll(ids, fast, within, later) {
     ids = [...new Set((ids || []).map(Number).filter(x => x > 0))];
-    if (allJob) { // already checking: these go first, the rest keep their place
-      const first = new Set(ids);
-      allJob.queue = ids.concat(allJob.queue.filter(x => !first.has(x)));
-      allJob.fast = Math.max(allJob.fast, fast || 0);
+    within = Math.max(0, Number(within) || 0);
+    if (allJob) { // already checking
+      const these = new Set(ids), rest = allJob.queue.filter(x => !these.has(x));
+      allJob.queue = later ? rest.concat(ids) : ids.concat(rest);
+      ids.forEach(x => allJob.within.set(x, within));
+      if (!later) { allJob.fast = Math.max(allJob.fast, fast || 0); hurry = true; } // a slow batch in progress stops early
       allJob.total = allJob.done + allJob.queue.length;
-      hurry = true; // a slow batch in progress stops early, so these start now
       return;
     }
-    allJob = { queue: ids, fast: fast || 0, done: 0, total: ids.length, changed: 0, waits: 0, fails: 0, tries: new Map() };
+    allJob = { queue: ids, within: new Map(ids.map(x => [x, within])), fast: fast || 0, done: 0, total: ids.length, changed: 0, shared: 0,
+      waits: 0, fails: 0, tries: new Map() };
     runAll();
+  }
+  // Which of these did any player check recently enough? -> [[id, open, has bazaar, gone, checked at (site seconds)], ...]
+  async function recentChecks(ids, within) {
+    if (!ids.some(x => within.get(x) > 0)) return [];
+    try {
+      let r = await siteCall('POST', '/api/fresh', { ids }, await token());
+      if (r.status === 401) { sset('token', ''); r = await siteCall('POST', '/api/fresh', { ids }, await signIn()); }
+      const j = JSON.parse(r.text);
+      if (r.status !== 200 || !Array.isArray(j.rows)) return [];
+      return j.rows.filter(x => j.now - x[4] <= (within.get(x[0]) || 0)).map(x => [x[0], x[1] ? 1 : 0, x[2] ? 1 : 0, x[3] ? 1 : 0, x[4]]);
+    } catch (e) { return []; } // just check them
   }
   async function runAll() {
     const job = allJob, de = document.documentElement;
     const tell = (part, finished, error) => {
-      de.setAttribute('data-gc-check-part', JSON.stringify({ results: part || [], done: job.done, total: job.total, changed: job.changed, finished: !!finished, error: error || null }));
+      de.setAttribute('data-gc-check-part', JSON.stringify({ results: part || [], done: job.done, total: job.total, changed: job.changed,
+        shared: job.shared, finished: !!finished, error: error || null }));
       document.dispatchEvent(new Event('gc:checkpart'));
     };
     let error = null;
     while (job.queue.length) {
-      const fast = job.fast > 0, chunk = job.queue.splice(0, fast ? Math.min(25, job.fast) : 25);
+      const fast = job.fast > 0;
+      let chunk = job.queue.splice(0, fast ? Math.min(25, job.fast) : 25);
       if (fast) job.fast -= chunk.length;
+      const seen = await recentChecks(chunk, job.within); // another player checked these lately: use their answer
+      if (seen.length) {
+        const s1 = new Set(seen.map(x => x[0]));
+        chunk = chunk.filter(x => !s1.has(x));
+        job.done += seen.length; job.shared += seen.length;
+        tell(seen);
+      }
+      if (!chunk.length) continue;
       const r = await checkBazaars(chunk, fast);
       if (r.busy) { job.queue = chunk.concat(job.queue); await sleep(2000); continue; }
       const got = new Set((r.results || []).map(x => x[0]));
@@ -857,7 +882,7 @@
     // the page asks for all of your sellers to be checked: when it opens, and when you press Check now (nothing on a timer)
     document.addEventListener('gc:checkall', () => {
       let req = {}; try { req = JSON.parse(de.getAttribute('data-gc-checkall') || '{}'); } catch (e) { /* none */ }
-      if (cfg.ready() && !state.needsSetup) checkAll(Array.isArray(req.ids) ? req.ids : [], Number(req.fast) || 0);
+      if (cfg.ready() && !state.needsSetup) checkAll(Array.isArray(req.ids) ? req.ids : [], Number(req.fast) || 0, Number(req.within) || 0, !!req.later);
       else { de.setAttribute('data-gc-check-part', JSON.stringify({ results: [], done: 0, total: 0, finished: true, error: 'Set up the 🧭 userscript on Torn first.' })); document.dispatchEvent(new Event('gc:checkpart')); }
     });
     document.addEventListener('gc:debug', () => { de.setAttribute('data-gc-debug', hideKey(JSON.stringify(debugSample()))); });
@@ -891,7 +916,7 @@
       wired: { tap, openSite, siteUrl, showOpenLink, openSetup, renderSetup, onSetup, setMsg, setStatus, statusText, run, readRange,
         sendToSite, siteMe, signIn, token, debugSample, initSite, init, mount, attachPointer, placeBtn, stepAside, setBtn,
         checkBazaars, paced, nextToCheck, mySellers, postChecks, itemsIfDue, parseBazaar, parseName, recoverKey, recheckKey,
-        checkKey, keyMissing, setMissing, missingText, showKeyErr, checkAll, runAll } };
+        checkKey, keyMissing, setMissing, missingText, showKeyErr, checkAll, runAll, recentChecks } };
   }
   if (typeof document !== 'undefined' && !globalThis.__GC_TEST) init();
 })();

@@ -282,7 +282,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
         <option value="open">Open first</option><option value="visit">Recently visited</option><option value="name">Name A–Z</option>
       </select>
       <button class="btn" id="filtersBtn" aria-expanded="false" aria-controls="filters">Filters</button>
-      <button class="btn gold" id="checkBtn" title="Reads your log for new purchases (with the 🧭 userscript), then checks whether your sellers' bazaars are open: new sellers, your regulars and the ones on screen first, then everyone else">⟳ Check now</button>
+      <button class="btn gold" id="checkBtn" title="Reads your log for new purchases (with the 🧭 userscript), then checks whether bazaars are open: new sellers, your regulars and the cards shown (a check another player made in the last minute counts)">⟳ Check now</button>
       <span id="checkMsg"></span>
     </div>
 
@@ -386,7 +386,10 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   const ONE = '$1 items';
   const PAGE = 100;
   const REGULARS = 15; // "your regulars": pinned sellers first, then your most-bought-from, 15 in all
-  // Bazaars are checked only when this page opens and when you press Check now (no timers: your key's calls are limited).
+  // Bazaars are checked from this page only: your regulars and the cards shown when it opens, cards newly shown (Show more,
+  // filters, search) when they appear, and again on Check now. No timers (your key's calls are limited), and a seller any
+  // player checked in the last few minutes is not checked again: that answer is used.
+  const RECENT = 300, RECENT_NOW = 60; // "checked recently" in seconds: when the page opens / shows more, and for Check now
 
   // One small icon per Torn item type.
   const ICON = {
@@ -460,7 +463,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function seal(id) {
     const b = baz(id), l = latest(id), f = FRESH.get(id);
     const tip = f && l === f ? 'Checked ' + agoMs(f.at) + ' from this page. Press Check now for a fresh look.'
-      : l ? 'Last change seen ' + agoMs(l.at) + '. Your bazaars are checked when this page opens and when you press Check now.'
+      : l ? 'Last change seen ' + agoMs(l.at) + '. A card is checked when it is shown on this page, and again when you press Check now.'
       : 'Not checked yet: it is checked shortly (or press Check now)';
     return `<span class="seal ${b}" title="${esc(tip)}"><i></i>${SEAL[b] || ''}</span>`;
   }
@@ -544,6 +547,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     $('moreBtn').textContent = `Show ${Math.min(PAGE, list.length - st.shown)} more`;
     $('showing').textContent = list.length ? `${fmt(shown.length)} of ${fmt(list.length)} sellers` : '';
     renderStrip(); renderBearings(); renderChips(); renderFilterCount(); renderStatus();
+    checkShownSoon(); // cards shown for the first time (Show more, filters, search) get checked
   }
   // Re-render, but never while a click is in progress (replacing cards under a click can cancel it).
   function renderSoon() {
@@ -564,34 +568,56 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const regs = regulars();
     const open = regs.filter(s => openNow(s.id));
     const waiting = regs.some(s => baz(s.id) === 'unchecked') || (usAll() && CHK.running && regs.some(s => !FRESH.has(s.id)));
-    $('regNote').textContent = 'your ' + (regs.length || '') + ' regulars' + (usAll() && regDoneAt ? ' · checked ' + agoMs(regDoneAt) : '');
+    const ats = regs.map(s => (FRESH.get(s.id) || {}).at).filter(Boolean), oldest = ats.length ? Math.min(...ats) : 0;
+    $('regNote').textContent = 'your ' + (regs.length || '') + ' regulars' + (usAll() && oldest ? ' · checked ' + agoMs(oldest) : '');
     $('strip').innerHTML = open.length
       ? open.map(s => `<a class="reg sl${glowing(s.id) ? ' hl' : ''}" data-id="${s.id}" href="${bazaar(s.id)}" target="_blank" rel="noopener noreferrer" title="Open their bazaar">
           <span class="seal open"><i></i></span><span class="rn">${pinned(s.id) ? '📌 ' : ''}${esc(nameOf(s.id) || 'Player ' + s.id)}</span>
           <span class="ri">${topTypes(s, 2).map(([t]) => icon(t)).join('')}</span></a>`).join('')
       : `<span class="strip-empty">${!regs.length ? 'Your regulars appear here once purchases are synced.' : waiting ? 'Checking your regulars…' : 'None of your regulars were open at the last check. Press Check now for a fresh look.'}</span>`;
   }
-  // Check all your sellers with your key (userscript 0.5.6+): your regulars, new sellers and the cards on screen first and
-  // quickly, then everyone else at about 40 a minute. Batches arrive one by one (gc:checkpart) and update the page at once.
-  const CHK = { running: false, done: 0, total: 0, changed: 0, error: null, by: '' };
-  let regDoneAt = 0;
-  function checkAll(first, by) {
-    const regs = regulars().map(s => s.id), screen = idsOnScreen();
-    const lead = [...new Set((first || []).concat(regs, screen))].slice(0, 40);
-    const ids = [...new Set(lead.concat(DATA.sellers.map(s => s.id)))];
-    if (!ids.length) return false;
-    Object.assign(CHK, { running: true, done: 0, total: ids.length, changed: 0, error: null, by });
+  // Ask your userscript (0.5.6+) to check these sellers: `fast` of them 4 at a time, the rest at about 40 a minute, skipping
+  // any a player checked in the last `within` seconds (0.5.7+). Batches come back one by one (gc:checkpart) and show at once.
+  const CHK = { running: false, done: 0, total: 0, changed: 0, shared: 0, error: null, by: '' };
+  const CHECKED = new Set(); // sellers already asked for during this visit (a shown card is checked once; Check now again)
+  function requestChecks(ids, opt) {
+    ids = [...new Set(ids)].filter(Boolean);
+    if (!ids.length || !usAll()) return false;
+    ids.forEach(id => CHECKED.add(id));
+    if (!CHK.running) Object.assign(CHK, { running: true, done: 0, total: 0, changed: 0, shared: 0, error: null, by: '' });
+    if (opt.by !== undefined) CHK.by = opt.by;
+    if (!opt.later) CHK.total += ids.length;
     const de = document.documentElement;
-    de.setAttribute('data-gc-checkall', JSON.stringify({ ids, fast: lead.length }));
+    de.setAttribute('data-gc-checkall', JSON.stringify({ ids, fast: opt.fast || 0, within: opt.within || 0, later: !!opt.later }));
     document.dispatchEvent(new Event('gc:checkall'));
-    showCheck();
+    if (!opt.later) showCheck();
     return true;
+  }
+  const shownIds = () => list.slice(0, st.shown).map(x => x.s.id);
+  // When the page opens: your regulars and the cards shown. Then a few hidden sellers (no bazaar last time) that nobody has
+  // checked for a day, in case they opened one.
+  function checkOnOpen() {
+    const ids = [...new Set(regulars().map(s => s.id).concat(shownIds()))];
+    requestChecks(ids, { fast: Math.min(40, ids.length), within: RECENT });
+    if (verAtLeast(usVersion(), '0.5.7')) {
+      const hidden = DATA.sellers.filter(s => baz(s.id) === 'none' && !(latest(s.id) || {}).m).map(s => s.id).slice(0, 30);
+      requestChecks(hidden, { within: 86400, later: true });
+    }
+  }
+  // Cards that appear later (Show more, a filter, a search): checked once, shortly after they show.
+  let shownT = null;
+  function checkShownSoon() {
+    clearTimeout(shownT);
+    shownT = setTimeout(() => {
+      if (!autoChecked || !token) return;
+      const ids = shownIds().filter(id => !CHECKED.has(id));
+      if (ids.length) requestChecks(ids, { fast: Math.min(40, ids.length), within: RECENT });
+    }, 700);
   }
   document.addEventListener('gc:checkpart', () => {
     let p = {}; try { p = JSON.parse(document.documentElement.getAttribute('data-gc-check-part') || '{}'); } catch (e) { return; }
-    const regs = new Set(regulars().map(s => s.id));
-    if (takeResults(p) && (p.results || []).some(r => regs.has(Number(r[0])))) regDoneAt = Date.now();
-    Object.assign(CHK, { done: p.done || 0, total: Math.max(p.total || 0, p.done || 0), changed: p.changed || 0, running: !p.finished });
+    takeResults(p);
+    Object.assign(CHK, { done: p.done || 0, total: Math.max(p.total || 0, p.done || 0), changed: p.changed || 0, shared: p.shared || 0, running: !p.finished });
     if (p.error) CHK.error = p.error;
     showCheck(); renderStrip();
     poll(); // names found for new sellers, and anything else the site has now
@@ -601,7 +627,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function showCheck() {
     const msg = $('checkMsg'); clearTimeout(chkT);
     if (CHK.running) { msg.textContent = `Checking bazaars… ${fmt(CHK.done)} of ${fmt(CHK.total)}` + (CHK.error ? ' · ' + CHK.error : ''); return; }
-    msg.textContent = (CHK.by ? CHK.by + ' · ' : '') + `Checked ${fmt(CHK.done)} bazaar${CHK.done === 1 ? '' : 's'}` + (CHK.changed ? ` (${fmt(CHK.changed)} changed)` : '') + (CHK.error ? ' · ' + CHK.error : '');
+    const extra = [CHK.shared ? `${fmt(CHK.shared)} already checked by other players` : '', CHK.changed ? `${fmt(CHK.changed)} changed` : ''].filter(Boolean).join(', ');
+    msg.textContent = (CHK.by ? CHK.by + ' · ' : '') + `Checked ${fmt(CHK.done)} bazaar${CHK.done === 1 ? '' : 's'}` + (extra ? ` (${extra})` : '') + (CHK.error ? ' · ' + CHK.error : '');
     CHK.by = '';
     chkT = setTimeout(() => { if (!CHK.running) msg.textContent = ''; }, 12000);
   }
@@ -609,7 +636,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function takeResults(r) {
     if (!r || !Array.isArray(r.results) || !r.results.length) return false;
     const now = Date.now(), ids = [];
-    for (const [id, o, b, m] of r.results) { FRESH.set(Number(id), { at: now, o, b, m }); ids.push(Number(id)); }
+    for (const [id, o, b, m, ck] of r.results) { FRESH.set(Number(id), { at: ck ? Math.min(now, (ck - skew) * 1000) : now, o, b, m }); ids.push(Number(id)); }
     patchCards(ids);
     return true;
   }
@@ -825,7 +852,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   async function autoCheck() {
     if (autoChecked || !usCanCheck()) return;
     autoChecked = true;
-    if (usAll()) { checkAll([], ''); return; }
+    if (usAll()) { checkOnOpen(); return; }
     const ids = idsOnScreen().filter(id => baz(id) === 'unchecked' || !nameOf(id)).slice(0, 30);
     if (!ids.length) return;
     const r = await checkViaUserscript(ids, 90000);
@@ -854,7 +881,10 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     if (hasUserscript() && !usCanCheck()) notes.push('update the 🧭 userscript to check bazaars');
     else if (usAll()) {
       const text = notes.join(' · ');
-      checkAll(fresh, text ? text.charAt(0).toUpperCase() + text.slice(1) : '');
+      // Check now: new sellers, your regulars and the cards shown (a player's check from the last minute counts)
+      const ids2 = [...new Set(fresh.concat(regulars().map(s => s.id), shownIds()))];
+      requestChecks(ids2, { fast: Math.min(40, ids2.length), within: RECENT_NOW, by: text ? text.charAt(0).toUpperCase() + text.slice(1) : '' });
+      if (!ids2.length) showCheck();
       btn.textContent = label; btn.disabled = false;
       return;
     } else if (ids.length && hasUserscript()) {
@@ -1075,7 +1105,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const ck = checkedAt(), ke = usAttr('data-gc-keyerr');
     $('usStatus').innerHTML = !v ? 'Not on this device. This page needs it: ' + gf
       : !usCanCheck() ? `On this device: <b>version ${esc(v)}</b>. Please update it (${gf}) so it can check bazaars with your key.`
-      : `On this device: <b>version ${esc(v)}</b>. With your own key it sends your new purchases (every 15 minutes while Torn is open) and checks all your sellers' bazaars when this page opens and when you press Check now (your regulars and the ones on screen first, then everyone else at about 40 a minute; nothing on a timer).`
+      : `On this device: <b>version ${esc(v)}</b>. With your own key it sends your new purchases (every 15 minutes while Torn is open) and checks bazaars from this page only: your regulars and the cards shown when it opens, more cards as you show more, and again when you press Check now (about 40 a minute after the first few; nothing on a timer). A seller another player checked in the last few minutes isn't checked again: their answer is used.`
         + (ck ? ` Last check ${esc(agoMs(ck))}.` : '') + (ke ? ` <b>${esc(ke)}</b>` : '');
     $('resetPosRow').hidden = !v;
     $('usMsg').textContent = ''; $('debugMsg').textContent = '';
@@ -1150,7 +1180,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   });
   function signedOut(kind) {
     token = null; ls.set('token', null);
-    DATA = EMPTY; RAW = []; ME = null; LAST = 0; SEEN = new Set(); TOPS = []; KEEPS = new Map(); FRESH.clear(); regDoneAt = 0; STATUS.clear(); since = 0; autoChecked = false;
+    DATA = EMPTY; RAW = []; ME = null; LAST = 0; SEEN = new Set(); TOPS = []; KEEPS = new Map(); FRESH.clear(); CHECKED.clear(); STATUS.clear(); since = 0; autoChecked = false;
     $('tagline').textContent = 'Every bazaar you buy from'; $('whoName').textContent = ''; $('svWho').textContent = ''; // nothing of the last person stays on screen
     $('rows').innerHTML = ''; $('strip').innerHTML = '';
     if (location.hash === '#settings') history.replaceState(null, '', location.pathname + location.search);
