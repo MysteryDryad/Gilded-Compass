@@ -1,6 +1,7 @@
--- Gilded Compass database (Cloudflare D1), schema v10. The Worker creates these by itself on first use and upgrades
+-- Gilded Compass database (Cloudflare D1), schema v11. The Worker creates these by itself on first use and upgrades
 -- older databases automatically (see MIGRATIONS in src/worker.js); this file is a copy for reference.
-CREATE TABLE IF NOT EXISTS users (uid INTEGER PRIMARY KEY, name TEXT, created INTEGER NOT NULL, last_upload INTEGER NOT NULL DEFAULT 0);
+-- synced_to: the newest log entry a device has finished reading and sending (the player's other devices start from there)
+CREATE TABLE IF NOT EXISTS users (uid INTEGER PRIMARY KEY, name TEXT, created INTEGER NOT NULL, last_upload INTEGER NOT NULL DEFAULT 0, synced_to INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, uid INTEGER NOT NULL, created INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS sessions_uid ON sessions(uid);
 -- one row per upload: data = JSON [[ts, seller, [[item, qty]], cost_each, cost_total, log id], ...]; tmax = newest ts in it

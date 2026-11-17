@@ -10,7 +10,8 @@
 import { statusChanged, validIds, validBuy, validResult, newToken, sha256hex, bearer, looksLikeKey } from './logic.mjs';
 
 const SCHEMA = [
-  'CREATE TABLE IF NOT EXISTS users (uid INTEGER PRIMARY KEY, name TEXT, created INTEGER NOT NULL, last_upload INTEGER NOT NULL DEFAULT 0)',
+  // synced_to: the newest log entry a device has finished reading and sending (other devices start from there)
+  'CREATE TABLE IF NOT EXISTS users (uid INTEGER PRIMARY KEY, name TEXT, created INTEGER NOT NULL, last_upload INTEGER NOT NULL DEFAULT 0, synced_to INTEGER NOT NULL DEFAULT 0)',
   'CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, uid INTEGER NOT NULL, created INTEGER NOT NULL)',
   'CREATE INDEX IF NOT EXISTS sessions_uid ON sessions(uid)',
   // one row per upload: data = JSON [[ts, seller, [[item, qty]], cost_each, cost_total, log id], ...]
@@ -26,7 +27,7 @@ const SCHEMA = [
   // per player and seller: pinned / has a note (only that a note exists; the text stays on their device) = never dropped;
   // hide = when the player removed it (0 = not removed): off their list until they buy from it again or restore it
   'CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, hide INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID',
-  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '10')"
+  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '11')"
 ];
 const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owner jailed, inactive, too low, paused
 const SESSION_DAYS = 180;
@@ -67,7 +68,8 @@ async function withSchema(env, fn) {
 // v8: a player can remove a seller from their list (keeps.hide).
 // v9: keeps.hide holds when it was removed, so a later purchase from that seller brings it back.
 // v10: status.ck = when any player last checked the seller (the first check counts for every player who buys there).
-const SCHEMA_VERSION = 10;
+// v11: users.synced_to (one "last synced" point for all of a player's devices).
+const SCHEMA_VERSION = 11;
 const MIGRATIONS = {
   2: ['CREATE INDEX IF NOT EXISTS status_kind ON status(kind)', 'DROP INDEX IF EXISTS status_kind_t', 'DROP INDEX IF EXISTS status_name'],
   3: ['ALTER TABLE status ADD COLUMN u INTEGER NOT NULL DEFAULT 0', 'UPDATE status SET u = MAX(t, name_t) WHERE u = 0 AND (t > 0 OR name_t > 0)',
@@ -88,7 +90,8 @@ const MIGRATIONS = {
   7: ['CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID'],
   8: ['ALTER TABLE keeps ADD COLUMN hide INTEGER NOT NULL DEFAULT 0'],
   9: ["UPDATE keeps SET hide = CAST(strftime('%s', 'now') AS INTEGER) WHERE hide = 1"],
-  10: ['ALTER TABLE status ADD COLUMN ck INTEGER NOT NULL DEFAULT 0']
+  10: ['ALTER TABLE status ADD COLUMN ck INTEGER NOT NULL DEFAULT 0'],
+  11: ['ALTER TABLE users ADD COLUMN synced_to INTEGER NOT NULL DEFAULT 0']
 };
 let migrated = false;
 async function migrate(env) {
@@ -182,6 +185,7 @@ async function prune(env) {
     env.DB.prepare(`${LIST_CTE} DELETE FROM usets WHERE uid NOT IN (SELECT uid FROM y)`).bind(start),
     env.DB.prepare('DELETE FROM tops WHERE NOT EXISTS (SELECT 1 FROM usets u, json_each(u.sellers) j WHERE u.uid = tops.uid AND j.value = tops.seller)'),
     env.DB.prepare('DELETE FROM status WHERE id NOT IN (SELECT j.value FROM usets u, json_each(u.sellers) j)'),
+    env.DB.prepare("DELETE FROM meta WHERE k LIKE 'lock:%' AND json_extract(v, '$.until') < ?1").bind(now()),
     metaSet(env, 'pruned', day)
   ]);
   console.log('prune: bundles', r[0].meta.changes, 'players', r[2].meta.changes, 'tops', r[3].meta.changes, 'sellers', r[4].meta.changes);
@@ -475,6 +479,37 @@ async function postFresh(req, env, me) {
   const mine = new Set(JSON.parse(firstV(set) || '[]'));
   return json({ now: now(), rows: rows.results.filter(r => mine.has(r.id)).map(r => [r.id, r.is_open, r.has_bazaar, r.missing, r.ck]) });
 }
+// One device checks bazaars at a time for each player (a phone and a computer both open would double the calls on the same
+// Torn account). `dev` is a random id per open list page; the claim lasts LOCK_SECS and the holder renews it with every batch.
+// Taking it is one statement, so two devices can't both get it. {release: true} gives it back.
+const LOCK_SECS = 150;
+async function postLock(req, env, me) {
+  if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
+  let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
+  const dev = String((body && body.dev) || '');
+  if (!/^[A-Za-z0-9]{8,40}$/.test(dev)) return json({ error: 'Bad device id' }, 400);
+  const k = 'lock:' + me.uid, t = now();
+  if (body.release) {
+    await env.DB.prepare("DELETE FROM meta WHERE k = ?1 AND json_extract(v, '$.dev') = ?2").bind(k, dev).run();
+    return json({ ok: true, mine: false });
+  }
+  const [, cur] = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO meta (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = excluded.v
+        WHERE json_extract(meta.v, '$.until') < ?3 OR json_extract(meta.v, '$.dev') = ?4`).bind(k, JSON.stringify({ dev, until: t + LOCK_SECS }), t, dev),
+    metaGet(env, k)
+  ]);
+  let v = {}; try { v = JSON.parse(firstV(cur) || '{}'); } catch (e) { /* none */ }
+  return json({ ok: true, mine: v.dev === dev, until: Number(v.until) || 0, now: t });
+}
+// A device finished reading the log up to `upto` (a log entry's time) and sent everything: other devices start from there.
+async function postSynced(req, env, me) {
+  if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
+  let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
+  const upto = Math.trunc(Number(body && body.upto));
+  if (!(upto > 0) || upto > now() + 300) return json({ error: 'Bad time' }, 400);
+  await env.DB.prepare('UPDATE users SET synced_to = MAX(synced_to, ?2) WHERE uid = ?1').bind(me.uid, upto).run();
+  return json({ ok: true });
+}
 // Torn's item list (names and types) as fetched by the player's userscript, kept for that player only.
 async function postItems(req, env, me) {
   if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
@@ -517,9 +552,9 @@ async function handle(req, env, url, p, m) {
     if (!me) return json({ error: 'Please sign in' }, 401);
     await migrate(env); // the tables below are in the v4 layout
     if (p === '/api/me' && m === 'GET') {
-      const c = await env.DB.prepare('SELECT EXISTS (SELECT 1 FROM pbatches WHERE uid = ?1) AS has').bind(me.uid).first();
+      const c = await env.DB.prepare('SELECT EXISTS (SELECT 1 FROM pbatches WHERE uid = ?1) AS has, (SELECT synced_to FROM users WHERE uid = ?1) AS st').bind(me.uid).first();
       const has = !!(c && c.has); // `purchases` stays for older userscripts: 0 = none, 1 = some
-      return json(Object.assign({}, me, { hasPurchases: has, purchases: has ? 1 : 0, settings: SETTINGS }));
+      return json(Object.assign({}, me, { hasPurchases: has, purchases: has ? 1 : 0, settings: SETTINGS, syncedTo: Number(c && c.st) || 0 }));
     }
     if (p === '/api/data' && m === 'GET') return getData(env, me, Math.max(0, Number(url.searchParams.get('after')) || 0));
     if (p === '/api/status' && m === 'GET') return getStatus(env, me, Math.max(0, Number(url.searchParams.get('since')) || 0));
@@ -535,6 +570,8 @@ async function handle(req, env, url, p, m) {
     if (p === '/api/sellers' && m === 'GET') return getSellers(env, me);
     if (p === '/api/bazaar' && m === 'POST') return postBazaar(req.clone(), env, me);
     if (p === '/api/fresh' && m === 'POST') return postFresh(req.clone(), env, me);
+    if (p === '/api/lock' && m === 'POST') return postLock(req.clone(), env, me);
+    if (p === '/api/synced' && m === 'POST') return postSynced(req.clone(), env, me);
     if (p === '/api/items' && m === 'POST') return postItems(req.clone(), env, me);
     if (p === '/api/keep' && m === 'POST') return postKeep(req.clone(), env, me);
     return json({ error: 'Not found' }, 404);

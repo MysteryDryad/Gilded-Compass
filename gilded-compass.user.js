@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.8
+// @version      0.5.9
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -48,7 +48,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.8'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.9'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -342,7 +342,10 @@
     }
   }
 
-  // What the site knows about you: { purchases, settings: { lookback } } (null if it could not say).
+  async function reportSynced(upto) {
+    try { await siteCall('POST', '/api/synced', { upto }, await token()); } catch (e) { /* next sync tells it again */ }
+  }
+  // What the site knows about you: { purchases, settings: { lookback }, syncedTo } (null if it could not say).
   async function siteMe() {
     let r = await siteCall('GET', '/api/me', null, await token());
     if (r.status === 401) { sset('token', ''); r = await siteCall('GET', '/api/me', null, await signIn()); }
@@ -366,6 +369,11 @@
       if (state.lastSync && state.oldest == null) state.oldest = 0; // earlier versions always read everything
       // Self-repair: if the site holds none of your purchases (for example after "Delete my data"), read the log again.
       if (state.lastSync && !state.resume && !Object.keys(state.pending).length && site && site.purchases === 0) { state.lastSync = 0; state.oldest = null; save(); }
+      // Another of your devices already read and sent your log up to here: start from there (nothing is read or sent twice).
+      if (site && site.purchases && site.syncedTo > (state.lastSync || 0) && !state.resume) {
+        state.lastSync = site.syncedTo;
+        if (state.oldest == null) state.oldest = start; // that device read your history range
+      }
       let added = 0, sellers = [];
       const firstSync = !state.lastSync;
       const take = x => { added += x.added; sellers = sellers.concat(x.sellers); };
@@ -384,6 +392,8 @@
       }
       if (Object.keys(state.pending).length || (firstSync && added)) await sendToSite(firstSync && added ? 'first' : false);
       state.lastError = null; state.needsSetup = false; state.syncedAt = Date.now(); save(); shareSync(); setStatus('');
+      // everything up to here is read and sent: your other devices can start from here
+      if (state.lastSync > ((site && site.syncedTo) || 0) && !state.resume && !Object.keys(state.pending).length) reportSynced(state.lastSync);
       itemsIfDue();
       if (added) sellersCache = null; // new sellers: fetch the list again before the next checks
       setBtn('ok', added ? `Sent ${added} new purchase${added === 1 ? '' : 's'}` : 'Up to date');
@@ -571,6 +581,18 @@
       waits: 0, fails: 0, tries: new Map(), doneIds: new Set() };
     runAll();
   }
+  // One device checks at a time for your account (your phone and your computer both open would double the calls on the same
+  // Torn account): this open page's random id, and the claim it takes on the site before each batch (it lasts 2.5 minutes).
+  const DEV = (Math.random().toString(36).slice(2) + Date.now().toString(36)).replace(/[^a-z0-9]/g, '').slice(0, 24);
+  async function takeLock(release) {
+    try {
+      const body = { dev: DEV, release: !!release };
+      let r = await siteCall('POST', '/api/lock', body, await token());
+      if (r.status === 401) { sset('token', ''); r = await siteCall('POST', '/api/lock', body, await signIn()); }
+      const j = JSON.parse(r.text);
+      return r.status === 200 ? j : { mine: true }; // the site could not say: go ahead rather than wait forever
+    } catch (e) { return { mine: true }; }
+  }
   // Which of these did any player check recently enough? -> [[id, open, has bazaar, gone, checked at (site seconds)], ...]
   async function recentChecks(ids, within) {
     if (!ids.some(x => within.get(x) > 0)) return [];
@@ -586,13 +608,21 @@
     const job = allJob, de = document.documentElement;
     const count = list => { (list || []).forEach(x => job.doneIds.add(Number(x[0]))); job.done = job.doneIds.size; // each seller once
       job.total = job.done + new Set(job.queue.filter(x => !job.doneIds.has(x))).size; };
-    const tell = (part, finished, error, waiting) => {
+    const tell = (part, finished, error, waiting, other) => {
       de.setAttribute('data-gc-check-part', JSON.stringify({ results: part || [], done: job.done, total: job.total, changed: job.changed,
-        shared: job.shared, finished: !!finished, error: error || null, waiting: !!waiting }));
+        shared: job.shared, finished: !!finished, error: error || null, waiting: !!waiting, other: !!other }));
       document.dispatchEvent(new Event('gc:checkpart'));
     };
     let error = null;
     while (job.queue.length) {
+      if (!(await takeLock()).mine) {
+        // another of your devices (or tabs) is checking right now: use its results as they come, and call Torn for nothing
+        const seen = await recentChecks(job.queue.slice(0, 100), job.within);
+        if (seen.length) { const s1 = new Set(seen.map(x => x[0])); job.queue = job.queue.filter(x => !s1.has(x)); job.shared += seen.length; count(seen); }
+        tell(seen, false, null, false, true);
+        if (job.queue.length) await sleep(10000);
+        continue;
+      }
       const fast = job.fast > 0;
       let chunk = job.queue.splice(0, fast ? Math.min(25, job.fast) : 10); // slow batches of 10: progress every ~15 s
       if (fast) job.fast -= chunk.length;
@@ -629,6 +659,7 @@
       tell(r.results);
     }
     allJob = null;
+    takeLock(true); // done: your other devices can check now
     tell([], true, error);
   }
   // Torn's item list (names and types for the filters), weekly, for your page. Skipped if your key can't read it.
@@ -941,7 +972,7 @@
       wired: { tap, openSite, siteUrl, showOpenLink, openSetup, renderSetup, onSetup, setMsg, setStatus, statusText, run, readRange,
         sendToSite, siteMe, signIn, token, debugSample, initSite, init, mount, attachPointer, placeBtn, stepAside, setBtn,
         checkBazaars, paced, nextToCheck, mySellers, postChecks, itemsIfDue, parseBazaar, parseName, recoverKey, recheckKey,
-        checkKey, keyMissing, setMissing, missingText, showKeyErr, checkAll, runAll, recentChecks } };
+        checkKey, keyMissing, setMissing, missingText, showKeyErr, checkAll, runAll, recentChecks, takeLock, reportSynced } };
   }
   if (typeof document !== 'undefined' && !globalThis.__GC_TEST) init();
 })();

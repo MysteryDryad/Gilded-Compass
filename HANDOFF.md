@@ -79,6 +79,15 @@ Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each p
   says "too many". If Torn still says slow down (code 5 / HTTP 429) the check waits a minute (page: "Torn's limit for your key
   was reached… waiting a minute, then carrying on", `waiting` in `gc:checkpart`), tells the page as soon as it carries on, and
   goes on (5 times at most). A key that can't look at bazaars (code 16): stop. Other errors: retry the batch twice, 5 s apart.
+- **Several devices (0.5.9)**: one list page checks at a time for each player. Before each batch the userscript takes a claim on
+  the site (`POST /api/lock {dev}`: a random id per open list page, `meta` row `lock:<uid>` = {dev, until}, 150 s, renewed with
+  every batch, taken in one statement so two devices can't both get it; `{release: true}` when done; expired claims are deleted by
+  the daily cleanup). A page that finds the claim held calls Torn for nothing: every 10 s it takes the other device's results
+  from `/api/fresh` (the page says "your other device… is checking: using its results"), and checks what is left once the
+  claim is free. If the holder closes, the claim runs out after 150 s.
+- **One "last synced" point (schema v11, `users.synced_to`)**: after a sync has read and sent everything, the userscript reports
+  `POST /api/synced {upto}` (the newest log entry); `/api/me` returns `syncedTo`, and a device whose own point is older starts
+  reading the log from there (not after a "Delete my data", and not in the middle of its own half-done read).
 - Torn PDA's `PDA_httpGet/Post` have no time limit, so a request it drops used to hang the check forever: `http()` now gives up
   after 45 s and `httpRetry` tries again. Slow batches are 10 sellers (progress every ~15 s); progress counts each seller once.
 - The page shows an error or the waiting note only while it is current (it used to keep the first "busy" note to the end).
