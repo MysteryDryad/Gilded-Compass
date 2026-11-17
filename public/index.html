@@ -613,8 +613,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   document.addEventListener('gc:checkpart', () => {
     let p = {}; try { p = JSON.parse(document.documentElement.getAttribute('data-gc-check-part') || '{}'); } catch (e) { return; }
     takeResults(p);
-    Object.assign(CHK, { done: p.done || 0, total: Math.max(p.total || 0, p.done || 0), changed: p.changed || 0, shared: p.shared || 0, running: !p.finished });
-    if (p.error) CHK.error = p.error;
+    Object.assign(CHK, { done: p.done || 0, total: Math.max(p.total || 0, p.done || 0), changed: p.changed || 0, shared: p.shared || 0, running: !p.finished,
+      error: p.error || null, waiting: !!p.waiting }); // both only about this moment: they go as soon as checking carries on
     showCheck(); renderStrip();
     poll(); // names found for new sellers, and anything else the site has now
   });
@@ -622,7 +622,12 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   let chkT = null;
   function showCheck() {
     const msg = $('checkMsg'); clearTimeout(chkT);
-    if (CHK.running) { msg.textContent = `Checking bazaars… ${fmt(CHK.done)} of ${fmt(CHK.total)}` + (CHK.error ? ' · ' + CHK.error : ''); return; }
+    if (CHK.running) {
+      msg.textContent = `Checking bazaars… ${fmt(CHK.done)} of ${fmt(CHK.total)}`
+        + (CHK.waiting ? " · Torn's limit for your key was reached (it's shared with Torn PDA and your other scripts): waiting a minute, then carrying on" : '')
+        + (CHK.error ? ' · ' + CHK.error : '');
+      return;
+    }
     const extra = [CHK.shared ? `${fmt(CHK.shared)} already checked recently` : '', CHK.changed ? `${fmt(CHK.changed)} changed` : ''].filter(Boolean).join(', ');
     msg.textContent = (CHK.by ? CHK.by + ' · ' : '') + `Checked ${fmt(CHK.done)} bazaar${CHK.done === 1 ? '' : 's'}` + (extra ? ` (${extra})` : '') + (CHK.error ? ' · ' + CHK.error : '');
     CHK.by = '';

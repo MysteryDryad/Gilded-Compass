@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.7
+// @version      0.5.8
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -48,7 +48,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.7'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.8'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -98,6 +98,9 @@
       const pda = method === 'POST' ? (typeof PDA_httpPost === 'function' ? PDA_httpPost : null) : (typeof PDA_httpGet === 'function' ? PDA_httpGet : null);
       if (pda) {
         const p = method === 'POST' ? pda(url, headers || {}, body || '') : pda(url, headers || {});
+        // Torn PDA's requests have no time limit of their own (one it drops would wait forever): give up after 45 s
+        const t = setTimeout(() => reject(Object.assign(new Error('No reply from the network (timed out)'), { noReply: true })), 45000);
+        p.finally(() => clearTimeout(t)).catch(() => {});
         p.then(r => { if (!r) { reject(Object.assign(new Error('No reply from the network (Torn PDA returned nothing)'), { noReply: true })); return; } resolve({ status: r.status || r.statusCode, text: r.responseText }); }).catch(reject);
         return;
       }
@@ -143,15 +146,30 @@
   async function token() { return sget('token', '') || signIn(); }
 
   /* ===================== Torn API ===================== */
+  // Torn allows 100 calls a minute for everything that uses your key (Torn PDA, other scripts, this one). This script keeps to
+  // 50 a minute of its own, and to 30 for 10 minutes after Torn says "too many".
+  const tornTimes = [];
+  let tornSlowUntil = 0;
+  async function tornSlot() {
+    for (;;) {
+      const t = Date.now(), max = t < tornSlowUntil ? 30 : 50;
+      while (tornTimes.length && t - tornTimes[0] >= 60000) tornTimes.shift();
+      if (tornTimes.length < max) { tornTimes.push(t); return; }
+      await sleep(60000 - (t - tornTimes[tornTimes.length - max]) + 50);
+    }
+  }
   async function apiUrl(url, key) {
     key = key || cfg.key();
     if (!key) throw new Error('No Torn API key set yet.');
+    await tornSlot();
     const r = await httpRetry('GET', url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(key));
+    if (r.status === 429) tornSlowUntil = Date.now() + 10 * 60000;
     if (r.status === 429 || r.status >= 500) throw Object.assign(new Error('Torn is busy (HTTP ' + r.status + ').'), { rate: true });
     let j; try { j = JSON.parse(r.text); } catch (e) { throw new Error('Bad API response (HTTP ' + (r && r.status) + ')'); }
     const er = j && j.error;
     if (er && er.code === 16) throw Object.assign(new Error('This key can\'t read your log (Public and Limited keys can\'t). Tap "Create the key for me", make that key, then paste it here.'), { code: 16 });
     if (er && er.code === 2) throw Object.assign(new Error('Torn rejected the API key as incorrect.'), { code: 2 });
+    if (er && er.code === 5) tornSlowUntil = Date.now() + 10 * 60000;
     if (er && er.code === 5) throw Object.assign(new Error('Torn is limiting requests (too many in one minute).'), { rate: true, code: 5 });
     if (er) throw Object.assign(new Error('Torn API: ' + (er.error || er.code) + ' (code ' + er.code + ')'), { code: er.code });
     return j;
@@ -546,11 +564,11 @@
       allJob.queue = later ? rest.concat(ids) : ids.concat(rest);
       ids.forEach(x => allJob.within.set(x, within));
       if (!later) { allJob.fast = Math.max(allJob.fast, fast || 0); hurry = true; } // a slow batch in progress stops early
-      allJob.total = allJob.done + allJob.queue.length;
+      allJob.total = allJob.done + allJob.queue.filter(x => !allJob.doneIds.has(x)).length;
       return;
     }
     allJob = { queue: ids, within: new Map(ids.map(x => [x, within])), fast: fast || 0, done: 0, total: ids.length, changed: 0, shared: 0,
-      waits: 0, fails: 0, tries: new Map() };
+      waits: 0, fails: 0, tries: new Map(), doneIds: new Set() };
     runAll();
   }
   // Which of these did any player check recently enough? -> [[id, open, has bazaar, gone, checked at (site seconds)], ...]
@@ -566,31 +584,38 @@
   }
   async function runAll() {
     const job = allJob, de = document.documentElement;
-    const tell = (part, finished, error) => {
+    const count = list => { (list || []).forEach(x => job.doneIds.add(Number(x[0]))); job.done = job.doneIds.size; // each seller once
+      job.total = job.done + new Set(job.queue.filter(x => !job.doneIds.has(x))).size; };
+    const tell = (part, finished, error, waiting) => {
       de.setAttribute('data-gc-check-part', JSON.stringify({ results: part || [], done: job.done, total: job.total, changed: job.changed,
-        shared: job.shared, finished: !!finished, error: error || null }));
+        shared: job.shared, finished: !!finished, error: error || null, waiting: !!waiting }));
       document.dispatchEvent(new Event('gc:checkpart'));
     };
     let error = null;
     while (job.queue.length) {
       const fast = job.fast > 0;
-      let chunk = job.queue.splice(0, fast ? Math.min(25, job.fast) : 25);
+      let chunk = job.queue.splice(0, fast ? Math.min(25, job.fast) : 10); // slow batches of 10: progress every ~15 s
       if (fast) job.fast -= chunk.length;
       const seen = await recentChecks(chunk, job.within); // another player checked these lately: use their answer
       if (seen.length) {
         const s1 = new Set(seen.map(x => x[0]));
         chunk = chunk.filter(x => !s1.has(x));
-        job.done += seen.length; job.shared += seen.length;
+        job.shared += seen.length; count(seen);
         tell(seen);
       }
       if (!chunk.length) continue;
       const r = await checkBazaars(chunk, fast);
       if (r.busy) { job.queue = chunk.concat(job.queue); await sleep(2000); continue; }
       const got = new Set((r.results || []).map(x => x[0]));
-      job.done += got.size; job.changed += r.changed || 0;
+      count(r.results); job.changed += r.changed || 0;
       if (r.error) {
         const left = chunk.filter(x => !got.has(x));
-        if (r.kind === 'rate' && job.waits < 5) { job.waits++; job.queue = left.concat(job.queue); tell(r.results, false, r.error); await sleep(60000); continue; }
+        if (r.kind === 'rate' && job.waits < 5) {
+          job.waits++; job.queue = left.concat(job.queue); count([]);
+          tell(r.results, false, null, true); await sleep(60000);
+          tell([]); // carrying on: the page drops the waiting note straight away
+          continue;
+        }
         if (r.kind === 'other' && ++job.fails < 3) { job.queue = job.queue.concat(left); tell(r.results); await sleep(5000); continue; }
         error = r.kind === 'rate' ? 'Torn kept asking to slow down; press Check now later to finish.' : r.error;
         tell(r.results); break;
@@ -600,7 +625,7 @@
       const skipped = chunk.filter(x => !got.has(x) && (job.tries.get(x) || 0) < 1);
       skipped.forEach(x => job.tries.set(x, (job.tries.get(x) || 0) + 1));
       job.queue = job.queue.concat(skipped);
-      job.total = job.done + job.queue.length;
+      count([]);
       tell(r.results);
     }
     allJob = null;

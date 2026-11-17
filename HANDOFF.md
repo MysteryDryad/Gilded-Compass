@@ -74,8 +74,14 @@ Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each p
 - Each batch goes to the site (`POST /api/bazaar`) and to the page (`gc:checkpart`: {results (each [id, open, has bazaar, gone,
   ck?]), done, total, changed, shared, finished, error}); the page applies results at once, refreshes from the site, and shows
   "Checking bazaars… 40 of 115", then "Checked 115 bazaars (40 already checked recently, 12 changed)".
-- Torn says slow down (code 5 / HTTP 429): wait a minute and carry on (5 times at most). A key that can't look at bazaars
-  (code 16): stop. Other errors: retry the batch twice, 5 s apart.
+- **Torn's limit (0.5.8)**: Torn allows 100 calls a minute for everything using the key (Torn PDA, other scripts, this one), so
+  every Torn call this script makes goes through `tornSlot()`: at most 50 in any rolling minute, 30 for 10 minutes after Torn
+  says "too many". If Torn still says slow down (code 5 / HTTP 429) the check waits a minute (page: "Torn's limit for your key
+  was reached… waiting a minute, then carrying on", `waiting` in `gc:checkpart`), tells the page as soon as it carries on, and
+  goes on (5 times at most). A key that can't look at bazaars (code 16): stop. Other errors: retry the batch twice, 5 s apart.
+- Torn PDA's `PDA_httpGet/Post` have no time limit, so a request it drops used to hang the check forever: `http()` now gives up
+  after 45 s and `httpRetry` tries again. Slow batches are 10 sellers (progress every ~15 s); progress counts each seller once.
+- The page shows an error or the waiting note only while it is current (it used to keep the first "busy" note to the end).
 - **Regulars** (15: pinned first, then most bought from): "Open now" shows the ones whose newest answer is "open" from a check
   this visit asked for (its own or another player's), or newer news from the site; the header says "checked N ago" (the oldest).
 - Torn replies: code 6/7 → account gone (`missing`), code 5 / HTTP 429 → stop and post what was done, code 16 → the key lacks `bazaar`
