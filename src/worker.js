@@ -301,7 +301,11 @@ async function upload(req, env, me) {
     env.DB.prepare(`INSERT INTO usets (uid, sellers) SELECT ?1, json_group_array(value) FROM json_each(?2) WHERE value NOT IN ${HIDDEN}
         ON CONFLICT(uid) DO UPDATE SET sellers =
         (SELECT json_group_array(value) FROM (SELECT value FROM json_each(usets.sellers) UNION SELECT value FROM json_each(excluded.sellers)))`).bind(me.uid, S),
-    env.DB.prepare(`INSERT OR IGNORE INTO status (id) SELECT value FROM json_each(?2) WHERE value NOT IN ${HIDDEN}`).bind(me.uid, S));
+    env.DB.prepare(`INSERT OR IGNORE INTO status (id) SELECT value FROM json_each(?2) WHERE value NOT IN ${HIDDEN}`).bind(me.uid, S),
+    // bought from a seller after they were seen without a bazaar: they have one again (shown, and checked like any other)
+    env.DB.prepare(`UPDATE status SET has_bazaar = 1, t = ?3, u = ?3 WHERE has_bazaar = 0 AND missing = 0 AND EXISTS
+        (SELECT 1 FROM json_each(?2) j WHERE json_extract(j.value, '$[0]') = status.id AND json_extract(j.value, '$[1]') > status.t)`)
+      .bind(me.uid, JSON.stringify([...latest]), now()));
   st.push(env.DB.prepare('UPDATE users SET last_upload = ?2 WHERE uid = ?1').bind(me.uid, now()), metaSet(env, 'day:' + me.uid, JSON.stringify(q)));
   await env.DB.batch(st);
   return json({ ok: true, received: all.length, inserted: buys.length });

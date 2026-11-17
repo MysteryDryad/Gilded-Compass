@@ -19,7 +19,9 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
   ⚙ Settings › Removed sellers lists them with Restore (names remembered in the browser, `gc_removedNames`, in case the site
   forgets them).
 - Only **Bazaar buy** log entries are read (log types whose title starts with "Bazaar buy"), and each entry is checked again before it is kept.
-- Only sellers **with a bazaar** are shown. A seller found to have no bazaar (or a deleted account) is hidden (they come back if a later check finds a bazaar).
+- Only sellers **with a bazaar** are ever on the site. A seller found to have no bazaar (or a deleted account) is never shown,
+  counted or checked again; a purchase from their bazaar made after that (it proves they have one) brings them back (the upload
+  sets `has_bazaar = 1`, with `t`/`u` = now).
 - No site password. The userscript signs in with the player's own Torn key. The key is used for one Torn call (`user/basic`: who owns this key?) and is never stored. It gets a random token, and only its SHA-256 is kept (sessions last 180 days). The page gets that token from the userscript (`gc:token` / `gc:signin`) or from `#t=` when 🧭 opens it; the page has no key box.
 - Each player's purchases are stored under their player id and only returned to them. Bazaar flags and seller names are shared (public Torn info), and a player can only report results for sellers in their own list.
 - **No secrets** at all on the Worker (the old `TORN_API_KEY` can be deleted). The site owner's Cloudflare login is the only password.
@@ -58,8 +60,7 @@ Signing in to the site works with any key, Public included (only `user/basic` is
 ## Bazaar checks (the player's own key, in the userscript)
 Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each player's userscript checks **their own sellers** with
 **their own key**, only from the list page and never on a timer (0.5.7):
-- **When the list opens**: the 15 regulars and the cards shown (the first 100), then up to 30 hidden sellers (no bazaar last time)
-  that nobody has checked for a day, in case they opened one. **Cards shown later** (Show more, a filter, a search) are checked
+- **When the list opens**: the 15 regulars and the cards shown (the first 100). **Cards shown later** (Show more, a filter, a search) are checked
   once, shortly after they appear (`CHECKED` remembers what this visit already asked for).
 - **Check now**: reads the log (`gc:sync`), then new sellers, the regulars and all the cards shown.
 - **The first check counts for every player** (schema v10, `status.ck` = when any player last checked the seller, written at most

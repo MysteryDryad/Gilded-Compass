@@ -456,9 +456,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function baz(id) {
     const l = latest(id);
     if (!l) return 'unchecked';
-    if (l.m) return 'none'; // account gone
-    if (l.o) return 'open';
-    return l.b ? 'closed' : 'none';
+    if (l.m || !l.b) return 'none'; // no bazaar (or account gone): never on the site, even if Torn also says "open"
+    return l.o ? 'open' : 'closed';
   }
   const SEAL = { open: 'Open', closed: 'Closed', unchecked: 'Checking' };
   function seal(id) {
@@ -480,7 +479,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     hiddenNoBazaar = 0;
     const pickedBy = st.chips.size ? picked() : null;
     for (const s of DATA.sellers) {
-      if (baz(s.id) === 'none') { hiddenNoBazaar++; continue; } // no bazaar (or account gone): not shown
+      if (baz(s.id) === 'none') { hiddenNoBazaar++; continue; } // no bazaar (or account gone): never on the site
       const v = st.chips.size ? pickedBy.get(s.id) : s.tot; // any of the picked item types
       if (v) out.push({ s, v });
     }
@@ -595,15 +594,11 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     return true;
   }
   const shownIds = () => list.slice(0, st.shown).map(x => x.s.id);
-  // When the page opens: your regulars and the cards shown. Then a few hidden sellers (no bazaar last time) that nobody has
-  // checked for a day, in case they opened one.
+  // When the page opens: your regulars and the cards shown. (Sellers without a bazaar are never shown or checked; a new
+  // purchase from their bazaar brings them back.)
   function checkOnOpen() {
     const ids = [...new Set(regulars().map(s => s.id).concat(shownIds()))];
     requestChecks(ids, { fast: Math.min(40, ids.length), within: RECENT });
-    if (verAtLeast(usVersion(), '0.5.7')) {
-      const hidden = DATA.sellers.filter(s => baz(s.id) === 'none' && !(latest(s.id) || {}).m).map(s => s.id).slice(0, 30);
-      requestChecks(hidden, { within: 86400, later: true });
-    }
   }
   // Cards that appear later (Show more, a filter, a search): checked once, shortly after they show.
   let shownT = null;
@@ -674,7 +669,6 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     if (old) n.push(`Your 🧭 userscript (version ${usVersion()}) is too old to check bazaars. Update it from Greasy Fork (Tampermonkey: Dashboard › "Check for userscript updates"; Torn PDA updates it on its own).`);
     $('notices').innerHTML = n.map(t => `<div class="notice">${esc(t)}</div>`).join('');
     $('footer').textContent = (lastUpload ? `Purchases last synced ${ago(lastUpload)} by the 🧭 userscript` : 'No purchases synced yet')
-      + (hiddenNoBazaar ? ` · ${fmt(hiddenNoBazaar)} seller${hiddenNoBazaar === 1 ? '' : 's'} without a bazaar hidden` : '')
       + (removedCount() ? ` · ${fmt(removedCount())} removed (⚙ Settings to restore)` : '');
   }
   // Status changes: update seals and names in place; only re-render when filters or sorting depend on them.
