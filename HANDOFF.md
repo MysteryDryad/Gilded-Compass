@@ -65,14 +65,14 @@ Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each p
 - **The first check counts for every player** (schema v10, `status.ck` = when any player last checked the seller, written at most
   every 2.5 minutes per seller, `CK_EVERY`; capped at 100,000 per player per day). Before each batch the userscript asks
   `POST /api/fresh {ids}` (→ `{now, rows: [[id, open, has bazaar, gone, ck]]}`, own sellers only) and skips the ones checked
-  within 5 minutes (opening, Show more) or 1 minute (Check now), using that answer instead (the page shows "N already checked
-  by other players").
+  within 5 minutes (opening, Show more) or 30 seconds (Check now; Torn's own cache is about 30 s), using that answer instead
+  (the page shows "N already checked recently").
 - Requests: `gc:checkall` with `data-gc-checkall` = {ids, fast, within, later}: the first `fast` go 4 at a time, the rest 25 per
   batch at one call every 1.5 s (about 40 a minute), with names for new sellers; a request goes to the front (or the end with
   `later`) of a check in progress, and a slow batch in progress stops early for it.
 - Each batch goes to the site (`POST /api/bazaar`) and to the page (`gc:checkpart`: {results (each [id, open, has bazaar, gone,
   ck?]), done, total, changed, shared, finished, error}); the page applies results at once, refreshes from the site, and shows
-  "Checking bazaars… 40 of 115", then "Checked 115 bazaars (40 already checked by other players, 12 changed)".
+  "Checking bazaars… 40 of 115", then "Checked 115 bazaars (40 already checked recently, 12 changed)".
 - Torn says slow down (code 5 / HTTP 429): wait a minute and carry on (5 times at most). A key that can't look at bazaars
   (code 16): stop. Other errors: retry the batch twice, 5 s apart.
 - **Regulars** (15: pinned first, then most bought from): "Open now" shows the ones whose newest answer is "open" from a check

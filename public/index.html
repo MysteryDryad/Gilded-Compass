@@ -282,7 +282,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
         <option value="open">Open first</option><option value="visit">Recently visited</option><option value="name">Name A–Z</option>
       </select>
       <button class="btn" id="filtersBtn" aria-expanded="false" aria-controls="filters">Filters</button>
-      <button class="btn gold" id="checkBtn" title="Reads your log for new purchases (with the 🧭 userscript), then checks whether bazaars are open: new sellers, your regulars and the cards shown (a check another player made in the last minute counts)">⟳ Check now</button>
+      <button class="btn gold" id="checkBtn" title="Reads your log for new purchases (with the 🧭 userscript), then checks whether bazaars are open: new sellers, your regulars and the cards shown (a check made in the last 30 seconds, by you or another player, counts)">⟳ Check now</button>
       <span id="checkMsg"></span>
     </div>
 
@@ -389,7 +389,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   // Bazaars are checked from this page only: your regulars and the cards shown when it opens, cards newly shown (Show more,
   // filters, search) when they appear, and again on Check now. No timers (your key's calls are limited), and a seller any
   // player checked in the last few minutes is not checked again: that answer is used.
-  const RECENT = 300, RECENT_NOW = 60; // "checked recently" in seconds: when the page opens / shows more, and for Check now
+  const RECENT = 300, RECENT_NOW = 30; // "checked recently" in seconds: when the page opens / shows more, and for Check now
+  // (Torn itself answers from a cache for about 30 seconds, so checking sooner than that would only repeat the same answer)
 
   // One small icon per Torn item type.
   const ICON = {
@@ -627,7 +628,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function showCheck() {
     const msg = $('checkMsg'); clearTimeout(chkT);
     if (CHK.running) { msg.textContent = `Checking bazaars… ${fmt(CHK.done)} of ${fmt(CHK.total)}` + (CHK.error ? ' · ' + CHK.error : ''); return; }
-    const extra = [CHK.shared ? `${fmt(CHK.shared)} already checked by other players` : '', CHK.changed ? `${fmt(CHK.changed)} changed` : ''].filter(Boolean).join(', ');
+    const extra = [CHK.shared ? `${fmt(CHK.shared)} already checked recently` : '', CHK.changed ? `${fmt(CHK.changed)} changed` : ''].filter(Boolean).join(', ');
     msg.textContent = (CHK.by ? CHK.by + ' · ' : '') + `Checked ${fmt(CHK.done)} bazaar${CHK.done === 1 ? '' : 's'}` + (extra ? ` (${extra})` : '') + (CHK.error ? ' · ' + CHK.error : '');
     CHK.by = '';
     chkT = setTimeout(() => { if (!CHK.running) msg.textContent = ''; }, 12000);
@@ -1105,7 +1106,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const ck = checkedAt(), ke = usAttr('data-gc-keyerr');
     $('usStatus').innerHTML = !v ? 'Not on this device. This page needs it: ' + gf
       : !usCanCheck() ? `On this device: <b>version ${esc(v)}</b>. Please update it (${gf}) so it can check bazaars with your key.`
-      : `On this device: <b>version ${esc(v)}</b>. With your own key it sends your new purchases (every 15 minutes while Torn is open) and checks bazaars from this page only: your regulars and the cards shown when it opens, more cards as you show more, and again when you press Check now (about 40 a minute after the first few; nothing on a timer). A seller another player checked in the last few minutes isn't checked again: their answer is used.`
+      : `On this device: <b>version ${esc(v)}</b>. With your own key it sends your new purchases (every 15 minutes while Torn is open) and checks bazaars from this page only: your regulars and the cards shown when it opens, more cards as you show more, and again when you press Check now (about 40 a minute after the first few; nothing on a timer). A seller you or another player checked in the last few minutes isn't checked again: that answer is used (30 seconds for Check now).`
         + (ck ? ` Last check ${esc(agoMs(ck))}.` : '') + (ke ? ` <b>${esc(ke)}</b>` : '');
     $('resetPosRow').hidden = !v;
     $('usMsg').textContent = ''; $('debugMsg').textContent = '';
