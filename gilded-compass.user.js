@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.10
+// @version      0.5.11
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -48,7 +48,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.10'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.11'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -57,7 +57,7 @@
 
   // Torn PDA keeps each website's storage apart, but its PDA_storage is shared by every page this script runs on
   // (as in Arbitrage). The few things the Gilded Compass page also needs are kept there too.
-  const SHARED = ['apikey', 'token', 'me', 'sync', 'btnpos', 'btnpos_phone', 'ckpos', 'ckat', 'itemsat', 'keychk'];
+  const SHARED = ['apikey', 'token', 'me', 'sync', 'btnpos', 'btnpos_phone', 'ckpos', 'ckat', 'itemsat', 'keychk', 'bazv1'];
   const pda = () => (typeof PDA_storage !== 'undefined' && PDA_storage && typeof PDA_storage.get === 'function' ? PDA_storage : null);
   const cache = {};
   async function loadShared() {
@@ -414,7 +414,7 @@
       logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
       oldest: state.oldest, resume: state.resume ? Object.assign({}, state.resume, { seen: undefined }) : null, lastError: state.lastError,
       lastCheckAt: state.lastCheckAt || null, lastCheckError: state.lastCheckError || null, keyMissing: keyMissing(),
-      noBazaarReplies: state.bazSamples || [], suspectBatch: state.suspect || null,
+      noBazaarReplies: state.bazSamples || [], suspectBatch: state.suspect || null, usingV1Bazaar: useV1(),
       rawSamples: state.rawSamples, badSamples: state.badSamples, parsedSample: state.rawSamples.map(parseBuy) };
   }
 
@@ -503,6 +503,18 @@
     sset('ckpos', { t: ((pos.t || 0) + a.length) % Math.max(1, tops.length), a: ((pos.a || 0) + b.length) % Math.max(1, sellers.length) });
     return [...new Set(a.concat(b))];
   }
+  // Another player's bazaar (and name): Torn's v2 call first; if v2 answers error 7 ("Incorrect ID-entity relation"), 22 ("only
+  // in API v1") or something this script can't read, Torn's older v1 call (user/{id}?selections=...), which other tools use for
+  // other players' bazaars. Once v2 has failed like that, v1 is used first for a day (shared by every page).
+  const useV1 = () => Date.now() - (sget('bazv1', 0) || 0) < 86400000;
+  async function tornOther(id, sel, read) {
+    if (!useV1()) {
+      try { const j = await api(`user/${id}/${sel}`); if (read(j)) return j; }
+      catch (e) { if (e.code !== 7 && e.code !== 22) throw e; }
+      sset('bazv1', Date.now());
+    }
+    return apiUrl(`https://api.torn.com/user/${id}?selections=${sel}`);
+  }
   // What Torn said for the last few sellers read as "no bazaar" or "no such player" (for the debug sample; never your key).
   function keepSample(id, code, j) {
     state.bazSamples = (state.bazSamples || []).slice(-4).concat({ id, code, at: Date.now(), reply: j ? hideKey(JSON.stringify(j)).slice(0, 300) : null });
@@ -540,7 +552,7 @@
     try {
       await paced(ids, async id => {
         try {
-          const j = await api(`user/${id}/bazaar`), b = parseBazaar(j);
+          const j = await tornOther(id, 'bazaar', parseBazaar), b = parseBazaar(j);
           if (b) results.push([id, b.is_open, b.has_bazaar, 0]);
           if (!b || !b.has_bazaar) keepSample(id, null, j);
         } catch (e) {
@@ -549,6 +561,10 @@
           else if (e.code || e.rate) throw tornError(e);
         }
       }, fast);
+      if (ids.length >= 4 && !results.length && !hurry) {
+        const last = (state.bazSamples || []).slice(-1)[0] || {};
+        throw Object.assign(new Error(`Torn gave no usable answer for these bazaars${last.code ? ' (error ' + last.code + ')' : ''}. Try Check now later; if it keeps happening, send the debug sample from ⚙.`), { code: last.code || 99 });
+      }
       // A batch where most sellers suddenly have "no bazaar" (or no account) is not believable (Torn having a bad moment, or a
       // key problem): those answers are not recorded, so nobody's list empties. Open/closed answers in it still count.
       const odd = results.filter(r => !r[2] || r[3]);
@@ -565,7 +581,7 @@
         // names come along the first time a seller is checked (a few per round, so your key stays unhurried)
         if (!error) {
           await paced((j.needName || []).slice(0, fast ? 16 : 8), async id => {
-            try { const nm = parseName(await api(`user/${id}/basic`)); if (nm) names.push([id, nm, 0]); }
+            try { const nm = parseName(await tornOther(id, 'basic', parseName)); if (nm) names.push([id, nm, 0]); }
             catch (e) { if (e.code === 6) names.push([id, '(not found)', 1]); else if (e.code === 7) { /* not "no such player": try again later */ } else if (e.code || e.rate) throw tornError(e); }
           }, fast).catch(e => { error = hideKey(e.message || e); kind = e.rate ? 'rate' : e.stop || e.code === 2 ? 'key' : 'other'; });
         }
@@ -593,7 +609,8 @@
       allJob.queue = later ? rest.concat(ids) : ids.concat(rest);
       ids.forEach(x => allJob.within.set(x, within));
       if (!later) { allJob.fast = Math.max(allJob.fast, fast || 0); hurry = true; } // a slow batch in progress stops early
-      allJob.total = allJob.done + allJob.queue.filter(x => !allJob.doneIds.has(x)).length;
+      allJob.total = allJob.done + new Set(allJob.queue.filter(x => !allJob.doneIds.has(x))).size;
+      if (allJob.tell) allJob.tell([]); // the page shows the new total straight away
       return;
     }
     allJob = { queue: ids, within: new Map(ids.map(x => [x, within])), fast: fast || 0, done: 0, total: ids.length, changed: 0, shared: 0,
@@ -632,6 +649,7 @@
         shared: job.shared, finished: !!finished, error: error || null, waiting: !!waiting, other: !!other }));
       document.dispatchEvent(new Event('gc:checkpart'));
     };
+    job.tell = tell;
     let error = null;
     while (job.queue.length) {
       if (!(await takeLock()).mine) {

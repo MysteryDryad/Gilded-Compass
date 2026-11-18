@@ -166,8 +166,8 @@ select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); ba
 .rm-ic { color: var(--red); font-weight: 800; }
 #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 60; max-width: calc(100vw - 32px);
   display: flex; align-items: center; gap: 14px; padding: 10px 12px 10px 16px; border-radius: 999px;
-  background: var(--text); color: var(--bg); box-shadow: var(--shadow); font-size: 13.5px; }
-#toast button { border: 0; background: none; color: var(--gold-hi); font-weight: 700; cursor: pointer; padding: 4px 6px; font-size: 13.5px; }
+  background: var(--card2); color: var(--text); border: 1px solid var(--gold2); box-shadow: var(--shadow); font-size: 13.5px; }
+#toast button { border: 0; background: none; color: var(--gold); font-weight: 700; cursor: pointer; padding: 4px 6px; font-size: 13.5px; }
 .rmrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
 .rmrow:first-child { border-top: 0; }
 .note { color: var(--gold); font-size: 13px; font-style: italic; overflow-wrap: anywhere; border-top: 1px dashed var(--line); padding-top: 6px; }
@@ -586,7 +586,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     ids.forEach(id => CHECKED.add(id));
     if (!CHK.running) Object.assign(CHK, { running: true, done: 0, total: 0, changed: 0, shared: 0, error: null, by: '' });
     if (opt.by !== undefined) CHK.by = opt.by;
-    if (!opt.later) CHK.total += ids.length;
+    if (!CHK.total && !opt.later) CHK.total = ids.length; // after that the userscript says the total (each seller once)
     const de = document.documentElement;
     de.setAttribute('data-gc-checkall', JSON.stringify({ ids, fast: opt.fast || 0, within: opt.within || 0, later: !!opt.later }));
     document.dispatchEvent(new Event('gc:checkall'));
@@ -1005,6 +1005,9 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function toast(html, onUndo) {
     const t = $('toast'); clearTimeout(toastT);
     t.innerHTML = '<span>' + html + '</span>' + (onUndo ? '<button type="button" data-undo>Undo</button>' : ''); t.hidden = false;
+    // on phones the progress message sits at the bottom of the screen: put the pop-up just above it, not on top of it
+    const m = $('checkMsg'), r = m.textContent && getComputedStyle(m).position === 'fixed' ? m.getBoundingClientRect() : null;
+    t.style.bottom = r ? (window.innerHeight - r.top + 8) + 'px' : '';
     const b = t.querySelector('[data-undo]');
     if (b) b.onclick = () => { t.hidden = true; onUndo(); };
     toastT = setTimeout(() => { t.hidden = true; }, 8000);
