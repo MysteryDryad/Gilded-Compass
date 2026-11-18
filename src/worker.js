@@ -27,7 +27,7 @@ const SCHEMA = [
   // per player and seller: pinned / has a note (only that a note exists; the text stays on their device) = never dropped;
   // hide = when the player removed it (0 = not removed): off their list until they buy from it again or restore it
   'CREATE TABLE IF NOT EXISTS keeps (uid INTEGER NOT NULL, seller INTEGER NOT NULL, pin INTEGER NOT NULL DEFAULT 0, note INTEGER NOT NULL DEFAULT 0, hide INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (uid, seller)) WITHOUT ROWID',
-  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '11')"
+  "INSERT OR IGNORE INTO meta (k, v) VALUES ('schemaV', '12')"
 ];
 const FATAL_CODES = new Set([1, 2, 10, 13, 16, 18]); // key missing, wrong, owner jailed, inactive, too low, paused
 const SESSION_DAYS = 180;
@@ -69,7 +69,9 @@ async function withSchema(env, fn) {
 // v9: keeps.hide holds when it was removed, so a later purchase from that seller brings it back.
 // v10: status.ck = when any player last checked the seller (the first check counts for every player who buys there).
 // v11: users.synced_to (one "last synced" point for all of a player's devices).
-const SCHEMA_VERSION = 11;
+// v12: every seller marked "no bazaar" or "no such player" goes back to "not checked yet" (some were marked wrongly), and is
+// checked again the next time it is shown.
+const SCHEMA_VERSION = 12;
 const MIGRATIONS = {
   2: ['CREATE INDEX IF NOT EXISTS status_kind ON status(kind)', 'DROP INDEX IF EXISTS status_kind_t', 'DROP INDEX IF EXISTS status_name'],
   3: ['ALTER TABLE status ADD COLUMN u INTEGER NOT NULL DEFAULT 0', 'UPDATE status SET u = MAX(t, name_t) WHERE u = 0 AND (t > 0 OR name_t > 0)',
@@ -91,7 +93,10 @@ const MIGRATIONS = {
   8: ['ALTER TABLE keeps ADD COLUMN hide INTEGER NOT NULL DEFAULT 0'],
   9: ["UPDATE keeps SET hide = CAST(strftime('%s', 'now') AS INTEGER) WHERE hide = 1"],
   10: ['ALTER TABLE status ADD COLUMN ck INTEGER NOT NULL DEFAULT 0'],
-  11: ['ALTER TABLE users ADD COLUMN synced_to INTEGER NOT NULL DEFAULT 0']
+  11: ['ALTER TABLE users ADD COLUMN synced_to INTEGER NOT NULL DEFAULT 0'],
+  12: [`UPDATE status SET is_open = NULL, has_bazaar = NULL, missing = 0, t = 0, ck = 0, u = CAST(strftime('%s', 'now') AS INTEGER),
+        name_t = CASE WHEN name = '(not found)' THEN 0 ELSE name_t END, name = CASE WHEN name = '(not found)' THEN NULL ELSE name END
+        WHERE has_bazaar = 0 OR missing = 1`]
 };
 let migrated = false;
 async function migrate(env) {
@@ -148,7 +153,7 @@ function saveStatements(env, out, old) {
     `UPDATE status SET
        is_open = COALESCE(json_extract(j.value, '$[1]'), is_open),
        has_bazaar = COALESCE(json_extract(j.value, '$[2]'), has_bazaar),
-       missing = MAX(missing, COALESCE(json_extract(j.value, '$[3]'), 0), COALESCE(json_extract(j.value, '$[6]'), 0)),
+       missing = MAX(COALESCE(json_extract(j.value, '$[3]'), missing), COALESCE(json_extract(j.value, '$[6]'), 0)),
        t = COALESCE(json_extract(j.value, '$[4]'), t),
        name = COALESCE(json_extract(j.value, '$[5]'), name),
        name_t = COALESCE(json_extract(j.value, '$[7]'), name_t),
@@ -430,7 +435,9 @@ async function getSellers(env, me) {
 async function postBazaar(req, env, me) {
   if (!isJson(req)) return json({ error: 'JSON body required' }, 415);
   let body; try { body = await req.json(); } catch (e) { return json({ error: 'Bad JSON' }, 400); }
-  const results = (Array.isArray(body && body.results) ? body.results : []).slice(0, 100).map(r => validResult(r)).filter(Boolean);
+  const trusted = body && body.p === 2; // userscript 0.5.10+: "no bazaar" / "no such player" only when Torn really said so
+  const results = (Array.isArray(body && body.results) ? body.results : []).slice(0, 100).map(r => validResult(r)).filter(Boolean)
+    .filter(r => trusted || (r[2] && !r[3]));
   const names = (Array.isArray(body && body.names) ? body.names : []).slice(0, 100)
     .filter(n => Array.isArray(n) && /^\d{1,10}$/.test(String(n[0])) && typeof n[1] === 'string' && n[1].length <= 40)
     .map(n => [Number(n[0]), n[1], n[2] ? 1 : 0]);
@@ -445,12 +452,12 @@ async function postBazaar(req, env, me) {
   const t = now();
   const out = {
     bazaar: results.filter(r => old.has(r[0])).map(r => [r[0], r[1], r[2], r[3], t]),
-    names: names.filter(n => { const o = old.get(n[0]); return o && (!o.name_t || (o.name !== n[1] && t - o.name_t > 7 * 86400)); }).map(n => [n[0], n[1], n[2], t])
+    names: names.filter(n => { const o = old.get(n[0]); return o && (!o.name_t || o.name === '(not found)' || (o.name !== n[1] && t - o.name_t > 7 * 86400)); }).map(n => [n[0], n[1], n[2], t])
   };
   const st = saveStatements(env, out, old);
   const changes = out.changed.length + out.names.length;
   const named = new Set(names.map(n => n[0]));
-  const needName = results.map(r => r[0]).filter(id => old.has(id) && !old.get(id).name_t && !named.has(id));
+  const needName = results.map(r => r[0]).filter(id => old.has(id) && (!old.get(id).name_t || old.get(id).name === '(not found)') && !named.has(id) && !results.find(r => r[0] === id)[3]);
   const checked = out.bazaar.map(r => r[0]);
   if (changes || checked.length) {
     const q = await dayCounter(env, me.uid);

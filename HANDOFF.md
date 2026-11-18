@@ -19,9 +19,15 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
   ⚙ Settings › Removed sellers lists them with Restore (names remembered in the browser, `gc_removedNames`, in case the site
   forgets them).
 - Only **Bazaar buy** log entries are read (log types whose title starts with "Bazaar buy"), and each entry is checked again before it is kept.
-- Only sellers **with a bazaar** are ever on the site. A seller found to have no bazaar (or a deleted account) is never shown,
-  counted or checked again; a purchase from their bazaar made after that (it proves they have one) brings them back (the upload
-  sets `has_bazaar = 1`, with `t`/`u` = now).
+- Only sellers **with a bazaar** are ever on the site. A seller found to have no bazaar (or a deleted account) is never shown or
+  counted. They are re-checked quietly (on page open, up to 30, only if nobody checked them in the last day; shared), and a
+  purchase from their bazaar made after that brings them back (the upload sets `has_bazaar = 1`, with `t`/`u` = now).
+- **Reading Torn's answer (0.5.10)**: `bazaar_exists` decides "no bazaar" (if Torn ever leaves it out: assume they have one);
+  only error 6 ("Incorrect ID") means "no such player" (error 7 leaves the seller as it was), and it clears if a later check
+  finds the player. A batch of 8+ where more than half come back "no bazaar"/"no such player" is not believable: those answers
+  are dropped (`suspectBatch` in the debug sample). The site only takes "none" answers from userscripts that send `p: 2`.
+  The debug sample keeps Torn's raw reply for the last few "none" answers (`noBazaarReplies`). Schema v12 reset every earlier
+  "no bazaar"/"no such player" verdict to "not checked yet" (one user's whole list had been hidden).
 - No site password. The userscript signs in with the player's own Torn key. The key is used for one Torn call (`user/basic`: who owns this key?) and is never stored. It gets a random token, and only its SHA-256 is kept (sessions last 180 days). The page gets that token from the userscript (`gc:token` / `gc:signin`) or from `#t=` when 🧭 opens it; the page has no key box.
 - Each player's purchases are stored under their player id and only returned to them. Bazaar flags and seller names are shared (public Torn info), and a player can only report results for sellers in their own list.
 - **No secrets** at all on the Worker (the old `TORN_API_KEY` can be deleted). The site owner's Cloudflare login is the only password.

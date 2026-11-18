@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.9
+// @version      0.5.10
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -48,7 +48,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.9'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.10'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -414,6 +414,7 @@
       logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
       oldest: state.oldest, resume: state.resume ? Object.assign({}, state.resume, { seen: undefined }) : null, lastError: state.lastError,
       lastCheckAt: state.lastCheckAt || null, lastCheckError: state.lastCheckError || null, keyMissing: keyMissing(),
+      noBazaarReplies: state.bazSamples || [], suspectBatch: state.suspect || null,
       rawSamples: state.rawSamples, badSamples: state.badSamples, parsedSample: state.rawSamples.map(parseBuy) };
   }
 
@@ -479,7 +480,7 @@
       open = pick(j.bazaar, ['bazaar_is_open', 'is_open']); exists = pick(j.bazaar, ['bazaar_exists', 'exists']);
     }
     if (open === undefined) return null;
-    return { is_open: open ? 1 : 0, has_bazaar: exists === undefined ? (open ? 1 : 0) : (exists ? 1 : 0) };
+    return { is_open: open ? 1 : 0, has_bazaar: exists === undefined ? 1 : (exists ? 1 : 0) }; // no "exists" field: don't guess "none"
   }
   function parseName(j) { const p = (j && (j.profile || j)) || {}; return typeof p.name === 'string' && p.name ? p.name : null; }
   const CHECK_PAUSE = 1500; // ms between background checks
@@ -501,6 +502,10 @@
     const a = pick(tops, pos.t || 0, tops.length ? Math.ceil(n * 0.6) : 0), b = pick(sellers, pos.a || 0, n - a.length);
     sset('ckpos', { t: ((pos.t || 0) + a.length) % Math.max(1, tops.length), a: ((pos.a || 0) + b.length) % Math.max(1, sellers.length) });
     return [...new Set(a.concat(b))];
+  }
+  // What Torn said for the last few sellers read as "no bazaar" or "no such player" (for the debug sample; never your key).
+  function keepSample(id, code, j) {
+    state.bazSamples = (state.bazSamples || []).slice(-4).concat({ id, code, at: Date.now(), reply: j ? hideKey(JSON.stringify(j)).slice(0, 300) : null });
   }
   async function postChecks(body) {
     let r = await siteCall('POST', '/api/bazaar', body, await token());
@@ -534,20 +539,34 @@
     };
     try {
       await paced(ids, async id => {
-        try { const b = parseBazaar(await api(`user/${id}/bazaar`)); if (b) results.push([id, b.is_open, b.has_bazaar, 0]); }
-        catch (e) { if (e.code === 6 || e.code === 7) results.push([id, 0, 0, 1]); else if (e.code || e.rate) throw tornError(e); }
+        try {
+          const j = await api(`user/${id}/bazaar`), b = parseBazaar(j);
+          if (b) results.push([id, b.is_open, b.has_bazaar, 0]);
+          if (!b || !b.has_bazaar) keepSample(id, null, j);
+        } catch (e) {
+          if (e.code === 6) { results.push([id, 0, 0, 1]); keepSample(id, 6, null); } // Torn: "Incorrect ID" (no such player)
+          else if (e.code === 7) keepSample(id, 7, null); // not "no such player": leave this seller as it was
+          else if (e.code || e.rate) throw tornError(e);
+        }
       }, fast);
+      // A batch where most sellers suddenly have "no bazaar" (or no account) is not believable (Torn having a bad moment, or a
+      // key problem): those answers are not recorded, so nobody's list empties. Open/closed answers in it still count.
+      const odd = results.filter(r => !r[2] || r[3]);
+      if (results.length >= 8 && odd.length * 2 > results.length) {
+        state.suspect = { at: Date.now(), of: results.length, odd: odd.length };
+        for (let i = results.length - 1; i >= 0; i--) if (!results[i][2] || results[i][3]) results.splice(i, 1);
+      }
     } catch (e) { error = hideKey(e.message || e); kind = e.rate ? 'rate' : e.stop || e.code === 2 ? 'key' : 'other'; }
     try {
       if (results.length) {
         if (!error && (keyMissing() || []).includes('user bazaar')) setMissing('user bazaar', false); // it can after all
-        const j = await postChecks({ results });
+        const j = await postChecks({ results, p: 2 }); // p: 2 = this version's reading of Torn's answers
         changed += j.changed || 0;
         // names come along the first time a seller is checked (a few per round, so your key stays unhurried)
         if (!error) {
           await paced((j.needName || []).slice(0, fast ? 16 : 8), async id => {
             try { const nm = parseName(await api(`user/${id}/basic`)); if (nm) names.push([id, nm, 0]); }
-            catch (e) { if (e.code === 6 || e.code === 7) names.push([id, '(not found)', 1]); else if (e.code || e.rate) throw tornError(e); }
+            catch (e) { if (e.code === 6) names.push([id, '(not found)', 1]); else if (e.code === 7) { /* not "no such player": try again later */ } else if (e.code || e.rate) throw tornError(e); }
           }, fast).catch(e => { error = hideKey(e.message || e); kind = e.rate ? 'rate' : e.stop || e.code === 2 ? 'key' : 'other'; });
         }
         if (names.length) changed += (await postChecks({ names })).changed || 0;

@@ -594,11 +594,15 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     return true;
   }
   const shownIds = () => list.slice(0, st.shown).map(x => x.s.id);
-  // When the page opens: your regulars and the cards shown. (Sellers without a bazaar are never shown or checked; a new
-  // purchase from their bazaar brings them back.)
+  // When the page opens: your regulars and the cards shown. Then, quietly, up to 30 sellers hidden for having no bazaar that
+  // nobody checked in the last day (they stay hidden unless a check finds a bazaar; a wrong "no bazaar" heals by itself).
   function checkOnOpen() {
     const ids = [...new Set(regulars().map(s => s.id).concat(shownIds()))];
     requestChecks(ids, { fast: Math.min(40, ids.length), within: RECENT });
+    if (verAtLeast(usVersion(), '0.5.10')) {
+      const hidden = DATA.sellers.filter(s => baz(s.id) === 'none').map(s => s.id).slice(0, 30);
+      requestChecks(hidden, { within: 86400, later: true });
+    }
   }
   // Cards that appear later (Show more, a filter, a search): checked once, shortly after they show.
   let shownT = null;
