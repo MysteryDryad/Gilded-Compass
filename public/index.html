@@ -137,6 +137,7 @@ select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); ba
 .seal.open i::after { content: "✦"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 9px; color: var(--on-gold); font-style: normal; }
 .seal.closed i { background: transparent; opacity: .8; }
 .seal.unchecked i { border-style: dashed; border-color: var(--muted); }
+.seal.private i { border-style: dotted; border-color: var(--muted); opacity: .7; }
 .icons { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--muted); }
 .icons span { white-space: nowrap; }
 .icons .ic { font-size: 15px; margin-right: 3px; }
@@ -458,13 +459,15 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function baz(id) {
     const l = latest(id);
     if (!l) return 'unchecked';
+    if (l.m === 2) return 'private'; // Torn keeps this player's bazaar private (error 7): can't say open or closed
     if (l.m || !l.b) return 'none'; // no bazaar (or account gone): never on the site, even if Torn also says "open"
     return l.o ? 'open' : 'closed';
   }
-  const SEAL = { open: 'Open', closed: 'Closed', unchecked: 'Checking' };
+  const SEAL = { open: 'Open', closed: 'Closed', unchecked: 'Checking', private: 'Private' };
   function seal(id) {
     const b = baz(id), l = latest(id), f = FRESH.get(id);
-    const tip = f && l === f ? 'Checked ' + agoMs(f.at) + ' from this page. Press Check now for a fresh look.'
+    const tip = b === 'private' ? 'Torn keeps this player\'s bazaar private, so no key can see whether it is open. Tap the name to look on Torn.'
+      : f && l === f ? 'Checked ' + agoMs(f.at) + ' from this page. Press Check now for a fresh look.'
       : l ? 'Last change seen ' + agoMs(l.at) + '. A card is checked when it is shown on this page, and again when you press Check now.'
       : 'Not checked yet: it is checked shortly (or press Check now)';
     return `<span class="seal ${b}" title="${esc(tip)}"><i></i>${SEAL[b] || ''}</span>`;

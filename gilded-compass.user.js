@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.11
+// @version      0.5.12
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -48,7 +48,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.11'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.12'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -67,6 +67,8 @@
       catch (e) { /* keep this page's own copy */ }
     }
     for (const k of SHARED) if (!(k in cache)) { const v = sgetLocal(k, null); if (v != null) sset(k, v); } // first run after updating: copy across
+    // this page's own copy of the key follows the shared one (the one used), so the two copies never drift apart
+    try { const k = cache.apikey; if (typeof k === 'string' && /^[A-Za-z0-9]{16}$/.test(k) && sgetLocal('apikey', '') !== k) { if (hasGM) GM_setValue(NS + 'apikey', JSON.stringify(k)); else localStorage.setItem(NS + 'apikey', JSON.stringify(k)); } } catch (e) { /* fine */ }
   }
   function sget(k, d) {
     if (k in cache) return cache[k] == null || cache[k] === '' ? d : cache[k];
@@ -557,7 +559,7 @@
           if (!b || !b.has_bazaar) keepSample(id, null, j);
         } catch (e) {
           if (e.code === 6) { results.push([id, 0, 0, 1]); keepSample(id, 6, null); } // Torn: "Incorrect ID" (no such player)
-          else if (e.code === 7) keepSample(id, 7, null); // not "no such player": leave this seller as it was
+          else if (e.code === 7) { results.push([id, 0, 1, 2]); keepSample(id, 7, null); } // Torn: this player's bazaar is private
           else if (e.code || e.rate) throw tornError(e);
         }
       }, fast);
@@ -567,10 +569,10 @@
       }
       // A batch where most sellers suddenly have "no bazaar" (or no account) is not believable (Torn having a bad moment, or a
       // key problem): those answers are not recorded, so nobody's list empties. Open/closed answers in it still count.
-      const odd = results.filter(r => !r[2] || r[3]);
+      const odd = results.filter(r => !r[2] || r[3] === 1); // (a private bazaar is a real answer, not an odd one)
       if (results.length >= 8 && odd.length * 2 > results.length) {
         state.suspect = { at: Date.now(), of: results.length, odd: odd.length };
-        for (let i = results.length - 1; i >= 0; i--) if (!results[i][2] || results[i][3]) results.splice(i, 1);
+        for (let i = results.length - 1; i >= 0; i--) if (!results[i][2] || results[i][3] === 1) results.splice(i, 1);
       }
     } catch (e) { error = hideKey(e.message || e); kind = e.rate ? 'rate' : e.stop || e.code === 2 ? 'key' : 'other'; }
     try {
@@ -580,7 +582,7 @@
         changed += j.changed || 0;
         // names come along the first time a seller is checked (a few per round, so your key stays unhurried)
         if (!error) {
-          await paced((j.needName || []).slice(0, fast ? 16 : 8), async id => {
+          await paced((j.needName || []).slice(0, fast ? 25 : 10), async id => {
             try { const nm = parseName(await tornOther(id, 'basic', parseName)); if (nm) names.push([id, nm, 0]); }
             catch (e) { if (e.code === 6) names.push([id, '(not found)', 1]); else if (e.code === 7) { /* not "no such player": try again later */ } else if (e.code || e.rate) throw tornError(e); }
           }, fast).catch(e => { error = hideKey(e.message || e); kind = e.rate ? 'rate' : e.stop || e.code === 2 ? 'key' : 'other'; });
@@ -637,7 +639,7 @@
       if (r.status === 401) { sset('token', ''); r = await siteCall('POST', '/api/fresh', { ids }, await signIn()); }
       const j = JSON.parse(r.text);
       if (r.status !== 200 || !Array.isArray(j.rows)) return [];
-      return j.rows.filter(x => j.now - x[4] <= (within.get(x[0]) || 0)).map(x => [x[0], x[1] ? 1 : 0, x[2] ? 1 : 0, x[3] ? 1 : 0, x[4]]);
+      return j.rows.filter(x => j.now - x[4] <= (within.get(x[0]) || 0)).map(x => [x[0], x[1] ? 1 : 0, x[2] ? 1 : 0, x[3] === 2 ? 2 : x[3] ? 1 : 0, x[4]]);
     } catch (e) { return []; } // just check them
   }
   async function runAll() {

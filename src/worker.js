@@ -457,7 +457,7 @@ async function postBazaar(req, env, me) {
   const st = saveStatements(env, out, old);
   const changes = out.changed.length + out.names.length;
   const named = new Set(names.map(n => n[0]));
-  const needName = results.map(r => r[0]).filter(id => old.has(id) && (!old.get(id).name_t || old.get(id).name === '(not found)') && !named.has(id) && !results.find(r => r[0] === id)[3]);
+  const needName = results.map(r => r[0]).filter(id => old.has(id) && (!old.get(id).name_t || old.get(id).name === '(not found)') && !named.has(id) && results.find(r => r[0] === id)[3] !== 1);
   const checked = out.bazaar.map(r => r[0]);
   if (changes || checked.length) {
     const q = await dayCounter(env, me.uid);

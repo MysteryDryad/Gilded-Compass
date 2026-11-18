@@ -20,11 +20,12 @@ export function validIds(ids, max = 30) {
   return out;
 }
 
-// A bazaar check result sent by a userscript: [id, is_open, has_bazaar, missing] (0 or 1) -> clean copy or null.
+// A bazaar check result sent by a userscript: [id, is_open, has_bazaar, missing] -> clean copy or null. is_open and has_bazaar
+// are 0 or 1; missing is 0 (fine), 1 (no such player) or 2 (Torn keeps this player's bazaar private: error 7).
 export function validResult(r) {
   if (!Array.isArray(r) || !/^\d{1,10}$/.test(String(r[0])) || !(Number(r[0]) > 0)) return null;
   const b = v => (v === 0 || v === 1 || v === true || v === false ? Number(v) : null);
-  const o = b(r[1]), h = b(r[2]), m = b(r[3] || 0);
+  const o = b(r[1]), h = b(r[2]), m = r[3] === 2 ? 2 : b(r[3] || 0);
   if (o === null || h === null || m === null) return null;
   return [Number(r[0]), o, h, m];
 }

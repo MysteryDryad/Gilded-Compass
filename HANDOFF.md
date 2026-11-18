@@ -22,6 +22,9 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 - Only sellers **with a bazaar** are ever on the site. A seller found to have no bazaar (or a deleted account) is never shown or
   counted. They are re-checked quietly (on page open, up to 30, only if nobody checked them in the last day; shared), and a
   purchase from their bazaar made after that brings them back (the upload sets `has_bazaar = 1`, with `t`/`u` = now).
+- **Private bazaars (0.5.12)**: Torn's error 7 means "A requested selection is private": that player's bazaar can't be read by
+  any key. The result is stored as `missing = 2` (0 = fine, 1 = no such player); the card shows a dotted "Private" seal, stays on
+  the list (you bought from their bazaar), and counts as neither open nor closed (filters and "Open now" leave it out).
 - **Torn's older call for other players (0.5.11)**: `tornOther()` asks v2 `user/{id}/bazaar` (or `/basic`) first; if v2 answers
   error 7 or 22, or something unreadable, it uses v1 `user/{id}?selections=bazaar` (as other Torn tools do for other players)
   and keeps using v1 first for a day (`bazv1`, shared). A batch of 4+ with no usable answer at all stops the check with a

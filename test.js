@@ -91,6 +91,8 @@ const eq = (name, a, b) => { const ok = JSON.stringify(a) === JSON.stringify(b);
   eq('key shape', [L.looksLikeKey('AbCdEfGh12345678'), L.looksLikeKey('short'), L.looksLikeKey('AbCdEfGh1234567!')], [true, false, false]);
   eq('check result ok', L.validResult(['123', true, 1, 0]), [123, 1, 1, 0]);
   eq('check result: missing defaults to 0', L.validResult([5, 0, 0]), [5, 0, 0, 0]);
+  eq('check result: private bazaar (2)', L.validResult([5, 0, 1, 2]), [5, 0, 1, 2]);
+  eq('check result rejects missing 3', L.validResult([5, 0, 1, 3]), null);
   eq('check result rejects bad id / flags', [L.validResult(['1; DROP', 1, 1, 0]), L.validResult([0, 1, 1, 0]), L.validResult([7, 'yes', 1, 0]), L.validResult([7, 2, 1, 0]), L.validResult('7')], [null, null, null, null, null]);
 
   console.log(fail ? `\n${fail} FAILED` : '\nAll passed');
