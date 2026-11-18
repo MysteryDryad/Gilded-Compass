@@ -229,7 +229,9 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   .cardx { padding: 10px 12px 8px; gap: 5px; }
   .sid, .meter, .stats .spent, .cf .visit { display: none; }
   #checkMsg:not(:empty) { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 20; padding: 10px 14px; border-radius: 14px;
-    background: var(--card); border: 1px solid var(--gold2); color: var(--text); box-shadow: var(--shadow); text-align: center; font-size: 13px; }
+    background: var(--card); border: 1px solid var(--gold2); color: var(--text); box-shadow: var(--shadow); text-align: center; font-size: 13px;
+    pointer-events: none; } /* only a message: taps go through to the filters and cards under it */
+  #app { padding-bottom: 96px; } /* room to scroll everything above the message at the bottom */
 }
 #sortRow { display: none; align-items: center; gap: 8px; margin-bottom: 10px; }
 </style>
@@ -542,12 +544,22 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     $('empty').hidden = !!shown.length;
     $('empty').innerHTML = !DATA.sellers.length
       ? 'No purchases here yet. If you just set up the <b>🧭 Gilded Compass</b> userscript, they are on their way: this page fills in by itself as they arrive. If not, install the userscript and open Torn.'
-      : 'No sellers match these filters.';
+      : emptyWhy();
     $('moreBtn').hidden = list.length <= st.shown;
     $('moreBtn').textContent = `Show ${Math.min(PAGE, list.length - st.shown)} more`;
     $('showing').textContent = list.length ? `${fmt(shown.length)} of ${fmt(list.length)} sellers` : '';
     renderStrip(); renderBearings(); renderChips(); renderFilterCount(); renderStatus();
     checkShownSoon(); // cards shown for the first time (Show more, filters, search) get checked
+  }
+  // Why nothing matches: filters combine (Open + Not visited = open and not visited), and a seller not checked yet is neither
+  // open nor closed. Says so, and offers to clear the filters.
+  function emptyWhy() {
+    const picked = [...st.chips].concat(st.baz !== 'any' ? [st.baz === 'open' ? 'Open' : 'Closed'] : [], st.visit !== 'any' ? [st.visit === 'yes' ? 'Visited' : 'Not visited'] : []);
+    const unchecked = st.baz !== 'any' ? DATA.sellers.filter(s => baz(s.id) === 'unchecked').length : 0;
+    let t = picked.length ? `No sellers match ${esc(picked.join(' + '))}` + (picked.length > 1 ? ' together' : '') : 'No sellers match this search';
+    if (unchecked) t += `: ${fmt(unchecked)} of your sellers haven't been checked yet, so they can't count as ${st.baz} yet. Press Check now`;
+    else if (st.visit === 'yes') t += '. "Visited" lists the sellers you opened from this list on this device';
+    return t + '.' + (picked.length ? ' <button class="btn small" data-clearall>Clear all filters</button>' : '');
   }
   // Re-render, but never while a click is in progress (replacing cards under a click can cancel it).
   function renderSoon() {
@@ -939,6 +951,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     st.visit = b.dataset.visit; st.shown = PAGE;
     document.querySelectorAll('[data-visit]').forEach(x => x.setAttribute('aria-pressed', x === b)); render();
   }));
+  $('empty').addEventListener('click', e => { if (e.target.closest('[data-clearall]')) $('clearFilters').click(); });
   $('clearFilters').addEventListener('click', () => {
     st.chips.clear(); st.baz = 'any'; st.visit = 'any'; st.shown = PAGE;
     document.querySelectorAll('[data-baz]').forEach(x => x.setAttribute('aria-pressed', x.dataset.baz === 'any'));
