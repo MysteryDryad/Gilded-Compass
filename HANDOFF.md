@@ -22,6 +22,10 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 - Only sellers **with a bazaar** are ever on the site. A seller found to have no bazaar (or a deleted account) is never shown or
   counted. They are re-checked quietly (on page open, up to 30, only if nobody checked them in the last day; shared), and a
   purchase from their bazaar made after that brings them back (the upload sets `has_bazaar = 1`, with `t`/`u` = now).
+- **Remembered filters (page only)**: the item types, Open/Closed and Visited picked last come back when the page opens again
+  (`localStorage` `gc_filters` = {chips, baz, visit}, saved on every change and on Clear all; unknown values are ignored; the
+  sort box was already remembered in `gc_sort`; the search box starts empty). A remembered type with nothing in it now still
+  gets its chip (count 0) so it can be seen and turned off.
 - **Faster checks (0.5.13)**: one Torn call per seller gets bazaar AND name: v1 `user/{id}?selections=basic,bazaar` (Torn
   counts one call however many selections; v2 `user/{id}/bazaar` answers error 7 for other players, so v1 is asked first and
   v2 only when v1's answer can't be read or says "wrong key"). The names come with the results in one `POST /api/bazaar`;

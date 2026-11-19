@@ -426,7 +426,15 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   let DATA = EMPTY;
   const STATUS = new Map(); // id -> { o, b, m, t, name, nt }
   let since = 0, skew = 0, lastUpload = 0, offline = false, siteErr = null; // siteErr: the site answered with an error
-  const st = { q: '', chips: new Set(), baz: 'any', visit: 'any', sort: ls.get('sort', 'rank'), shown: PAGE }; // chips: item types picked (none = everything)
+  // The filters you used last on this device (item types, Open/Closed, Visited) come back when the page opens again; the sort
+  // box is remembered too. The search box starts empty.
+  const savedF = (() => {
+    const f = ls.get('filters', null) || {};
+    return { chips: Array.isArray(f.chips) ? f.chips.filter(c => typeof c === 'string' && c && c.length <= 60).slice(0, 40) : [],
+      baz: ['any', 'open', 'closed'].includes(f.baz) ? f.baz : 'any', visit: ['any', 'yes', 'no'].includes(f.visit) ? f.visit : 'any' };
+  })();
+  const st = { q: '', chips: new Set(savedF.chips), baz: savedF.baz, visit: savedF.visit, sort: ls.get('sort', 'rank'), shown: PAGE }; // chips: item types picked (none = everything)
+  const saveFilters = () => ls.set('filters', { chips: [...st.chips], baz: st.baz, visit: st.visit });
   let INRANGE = [], PICKED = null; // purchases inside the 60 days; totals for the picked item types ({ key, by })
   // Totals per seller for the picked item types (worked out again only when the pick or the data changes).
   function picked() {
@@ -676,8 +684,9 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   function renderChips() {
     const tt = {}; // items per type, counting only sellers that are shown (have a bazaar)
     for (const sl of DATA.sellers) { if (baz(sl.id) === 'none') continue; for (const k in sl.t) tt[k] = (tt[k] || 0) + sl.t[k][1]; }
+    for (const c of st.chips) if (!(c in tt)) tt[c] = 0; // a picked type with nothing in it now stays visible, so it can be turned off
     const types = Object.keys(tt).filter(t => t !== ONE).sort((a, b) => tt[b] - tt[a]);
-    if (tt[ONE]) types.push(ONE);
+    if (ONE in tt) types.push(ONE);
     const chip = (val, label, ic, n) => `<button class="chip" data-chip="${esc(val)}" aria-pressed="${val ? st.chips.has(val) : !st.chips.size}"><span class="ic">${ic}</span>${esc(label)}${n != null ? `<b>${fmt(n)}</b>` : ''}</button>`;
     $('chips').innerHTML = chip('', 'Everything', '🧭', null) + types.map(t => chip(t, t, icon(t), tt[t])).join('');
   }
@@ -957,26 +966,27 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   ['sort', 'sort2'].forEach(id => { $(id).value = st.sort; $(id).addEventListener('change', e => {
     st.sort = e.target.value; ls.set('sort', st.sort); $('sort').value = $('sort2').value = st.sort; render();
   }); });
+  const syncSegs = () => { // the Open/Closed and Visited buttons show the filters in use (also the remembered ones on opening)
+    document.querySelectorAll('[data-baz]').forEach(x => x.setAttribute('aria-pressed', x.dataset.baz === st.baz));
+    document.querySelectorAll('[data-visit]').forEach(x => x.setAttribute('aria-pressed', x.dataset.visit === st.visit));
+  };
+  syncSegs();
   document.querySelectorAll('[data-baz]').forEach(b => b.addEventListener('click', () => {
-    st.baz = b.dataset.baz; st.shown = PAGE;
-    document.querySelectorAll('[data-baz]').forEach(x => x.setAttribute('aria-pressed', x === b)); render();
+    st.baz = b.dataset.baz; st.shown = PAGE; saveFilters(); syncSegs(); render();
   }));
   document.querySelectorAll('[data-visit]').forEach(b => b.addEventListener('click', () => {
-    st.visit = b.dataset.visit; st.shown = PAGE;
-    document.querySelectorAll('[data-visit]').forEach(x => x.setAttribute('aria-pressed', x === b)); render();
+    st.visit = b.dataset.visit; st.shown = PAGE; saveFilters(); syncSegs(); render();
   }));
   $('empty').addEventListener('click', e => { if (e.target.closest('[data-clearall]')) $('clearFilters').click(); });
   $('clearFilters').addEventListener('click', () => {
-    st.chips.clear(); st.baz = 'any'; st.visit = 'any'; st.shown = PAGE;
-    document.querySelectorAll('[data-baz]').forEach(x => x.setAttribute('aria-pressed', x.dataset.baz === 'any'));
-    document.querySelectorAll('[data-visit]').forEach(x => x.setAttribute('aria-pressed', x.dataset.visit === 'any'));
+    st.chips.clear(); st.baz = 'any'; st.visit = 'any'; st.shown = PAGE; saveFilters(); syncSegs();
     render();
   });
   $('chips').addEventListener('click', e => {
     const c = e.target.closest('[data-chip]'); if (!c) return;
     const v = c.dataset.chip;
     if (!v) st.chips.clear(); else if (st.chips.has(v)) st.chips.delete(v); else st.chips.add(v); // several types combine
-    st.shown = PAGE; render();
+    st.shown = PAGE; saveFilters(); render();
   });
   const phoneQ = window.matchMedia('(max-width: 700px)');
   const setPh = () => { $('q').placeholder = phoneQ.matches ? 'Search' : 'Search a seller, id or note  ( / )'; };
