@@ -22,15 +22,23 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 - Only sellers **with a bazaar** are ever on the site. A seller found to have no bazaar (or a deleted account) is never shown or
   counted. They are re-checked quietly (on page open, up to 30, only if nobody checked them in the last day; shared), and a
   purchase from their bazaar made after that brings them back (the upload sets `has_bazaar = 1`, with `t`/`u` = now).
+- **Faster checks (0.5.13)**: one Torn call per seller gets bazaar AND name: v1 `user/{id}?selections=basic,bazaar` (Torn
+  counts one call however many selections; v2 `user/{id}/bazaar` answers error 7 for other players, so v1 is asked first and
+  v2 only when v1's answer can't be read or says "wrong key"). The names come with the results in one `POST /api/bazaar`;
+  only names a check didn't bring (private bazaars) are looked up on their own. Six calls stay on the go at once (a pool, not
+  rounds that wait for the slowest), the limiter allows 60 a minute (5 kept back for log reads and key checks), the page asks
+  for every card it shows at full speed (only the quiet re-check of hidden sellers goes slowly), each batch asks the site for
+  the lock and for recent checks at the same time, Check now starts the bazaar checks while the log is read (new sellers join
+  the front), the shared storage is read all at once, and log pages are 0.4 s apart (was 1.2 s).
 - **Private bazaars (0.5.12)**: Torn's error 7 means "A requested selection is private": that player's bazaar can't be read by
   any key. The result is stored as `missing = 2` (0 = fine, 1 = no such player); the card shows a dotted "Private" seal, stays on
   the list (you bought from their bazaar), and counts as neither open nor closed (filters and "Open now" leave it out).
   A batch of 8+ where most answers are "private" is not believed (Torn or the key refusing, not everyone going private): those
   answers are dropped, like the "mostly no bazaar" guard. Each batch's seals go to the page as soon as the site has them
   (`checkBazaars(ids, fast, posted)`), before the batch's name lookups.
-- **Torn's older call for other players (0.5.11)**: `tornOther()` asks v2 `user/{id}/bazaar` (or `/basic`) first; if v2 answers
-  error 7 or 22, or something unreadable, it uses v1 `user/{id}?selections=bazaar` (as other Torn tools do for other players)
-  and keeps using v1 first for a day (`bazv1`, shared). A batch of 4+ with no usable answer at all stops the check with a
+- **Torn's older call for other players (0.5.11)**: v1 `user/{id}?selections=...` for other players' bazaars (as other Torn
+  tools do), since v2 answers error 7 for them. (0.5.11 and 0.5.12 asked v2 first and remembered v1 for a day in `bazv1`;
+  0.5.13 asks v1 first, see above.) A batch of 4+ with no usable answer at all stops the check with a
   message instead of going round at "0 of N". The page no longer adds to the total itself (the userscript reports it, also
   right after a Check now during a check).
 - **Reading Torn's answer (0.5.10)**: `bazaar_exists` decides "no bazaar" (if Torn ever leaves it out: assume they have one);
@@ -85,14 +93,14 @@ Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each p
   `POST /api/fresh {ids}` (→ `{now, rows: [[id, open, has bazaar, gone, ck]]}`, own sellers only) and skips the ones checked
   within 5 minutes (opening, Show more) or 30 seconds (Check now; Torn's own cache is about 30 s), using that answer instead
   (the page shows "N already checked recently").
-- Requests: `gc:checkall` with `data-gc-checkall` = {ids, fast, within, later}: the first `fast` go 4 at a time, the rest 25 per
-  batch at one call every 1.5 s (about 40 a minute), with names for new sellers; a request goes to the front (or the end with
-  `later`) of a check in progress, and a slow batch in progress stops early for it.
+- Requests: `gc:checkall` with `data-gc-checkall` = {ids, fast, within, later}: the first `fast` go 6 at once as fast as the
+  limiter allows (the page sends `fast` = all of them), the rest 10 per batch at one call every 1.5 s; a request goes to the
+  front (or the end with `later`) of a check in progress, and a slow batch in progress stops early for it.
 - Each batch goes to the site (`POST /api/bazaar`) and to the page (`gc:checkpart`: {results (each [id, open, has bazaar, gone,
   ck?]), done, total, changed, shared, finished, error}); the page applies results at once, refreshes from the site, and shows
   "Checking bazaars… 40 of 115", then "Checked 115 bazaars (40 already checked recently, 12 changed)".
 - **Torn's limit (0.5.8)**: Torn allows 100 calls a minute for everything using the key (Torn PDA, other scripts, this one), so
-  every Torn call this script makes goes through `tornSlot()`: at most 50 in any rolling minute, 30 for 10 minutes after Torn
+  every Torn call this script makes goes through `tornSlot()`: at most 60 in any rolling minute (0.5.13; was 50), 30 for 10 minutes after Torn
   says "too many". If Torn still says slow down (code 5 / HTTP 429) the check waits a minute (page: "Torn's limit for your key
   was reached… waiting a minute, then carrying on", `waiting` in `gc:checkpart`), tells the page as soon as it carries on, and
   goes on (5 times at most). A key that can't look at bazaars (code 16): stop. Other errors: retry the batch twice, 5 s apart.

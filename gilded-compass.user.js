@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.12
+// @version      0.5.13
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -31,8 +31,9 @@
  *   log entries (bazaar purchases only) and sends them to the site, where only you can see them.
  * - It checks whether the bazaars of sellers you bought from are open (and their names), with YOUR key, only from your Gilded
  *   Compass list: your regulars and the cards shown when it opens, more cards when you show more, and again when you press
- *   Check now (about 40 a minute after the first few; your key's 100 calls a minute are shared with Torn PDA and your other
- *   scripts). A seller another player checked in the last few minutes is not checked again: their answer is used.
+ *   Check now (one Torn call per seller for its bazaar and name; at most 60 calls a minute, as your key's 100 a minute are
+ *   shared with Torn PDA and your other scripts). A seller another player checked in the last few minutes is not checked
+ *   again: their answer is used.
  *   These are public Torn facts; the site keeps them and shares them with other players who buy from the same sellers.
  *
  * Privacy and safety
@@ -48,24 +49,25 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.12'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.13'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
-  const PAUSE = 1200;               // ms between log pages (Torn allows 100 calls a minute, shared with other tools)
+  const PAUSE = 400;                // ms between log pages (the Torn limiter below keeps the overall pace)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
   const HISTORY_DAYS = 60;          // the site keeps the last 60 days of purchases for everyone, so it never reads further back
   const CHUNK = 1000;               // purchases per upload
 
   // Torn PDA keeps each website's storage apart, but its PDA_storage is shared by every page this script runs on
   // (as in Arbitrage). The few things the Gilded Compass page also needs are kept there too.
-  const SHARED = ['apikey', 'token', 'me', 'sync', 'btnpos', 'btnpos_phone', 'ckpos', 'ckat', 'itemsat', 'keychk', 'bazv1'];
+  const SHARED = ['apikey', 'token', 'me', 'sync', 'btnpos', 'btnpos_phone', 'ckpos', 'ckat', 'itemsat', 'keychk'];
   const pda = () => (typeof PDA_storage !== 'undefined' && PDA_storage && typeof PDA_storage.get === 'function' ? PDA_storage : null);
   const cache = {};
   async function loadShared() {
     const n = pda(); if (!n) return;
-    for (const k of SHARED) {
-      try { const v = await n.get(NS + k, null); if (v != null && v !== '') cache[k] = typeof v === 'string' ? JSON.parse(v) : v; }
+    const got = await Promise.all(SHARED.map(k => Promise.resolve().then(() => n.get(NS + k, null)).catch(() => null))); // all at once
+    SHARED.forEach((k, i) => {
+      try { const v = got[i]; if (v != null && v !== '') cache[k] = typeof v === 'string' ? JSON.parse(v) : v; }
       catch (e) { /* keep this page's own copy */ }
-    }
+    });
     for (const k of SHARED) if (!(k in cache)) { const v = sgetLocal(k, null); if (v != null) sset(k, v); } // first run after updating: copy across
   }
   // After the shared key has just worked with Torn, this page's own copy follows it, so the two copies stop drifting apart. (Not
@@ -152,21 +154,23 @@
 
   /* ===================== Torn API ===================== */
   // Torn allows 100 calls a minute for everything that uses your key (Torn PDA, other scripts, this one). This script keeps to
-  // 50 a minute of its own, and to 30 for 10 minutes after Torn says "too many".
+  // 60 a minute of its own, and to 30 for 10 minutes after Torn says "too many". Bazaar checks leave the last 5 of those for
+  // your log and key checks (`reserve`), so a long check never holds up reading your log.
   const tornTimes = [];
   let tornSlowUntil = 0;
-  async function tornSlot() {
+  const CHECK_RESERVE = 5;
+  async function tornSlot(reserve) {
     for (;;) {
-      const t = Date.now(), max = t < tornSlowUntil ? 30 : 50;
+      const t = Date.now(), max = (t < tornSlowUntil ? 30 : 60) - (reserve || 0);
       while (tornTimes.length && t - tornTimes[0] >= 60000) tornTimes.shift();
       if (tornTimes.length < max) { tornTimes.push(t); return; }
       await sleep(60000 - (t - tornTimes[tornTimes.length - max]) + 50);
     }
   }
-  async function apiUrl(url, key) {
+  async function apiUrl(url, key, reserve) {
     key = key || cfg.key();
     if (!key) throw new Error('No Torn API key set yet.');
-    await tornSlot();
+    await tornSlot(reserve);
     const r = await httpRetry('GET', url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(key));
     if (r.status === 429) tornSlowUntil = Date.now() + 10 * 60000;
     if (r.status === 429 || r.status >= 500) throw Object.assign(new Error('Torn is busy (HTTP ' + r.status + ').'), { rate: true });
@@ -419,7 +423,7 @@
       logIds: state.logIds, sent: state.sent, pending: Object.keys(state.pending).length, unreadable: state.badCount, lastSync: state.lastSync,
       oldest: state.oldest, resume: state.resume ? Object.assign({}, state.resume, { seen: undefined }) : null, lastError: state.lastError,
       lastCheckAt: state.lastCheckAt || null, lastCheckError: state.lastCheckError || null, keyMissing: keyMissing(),
-      noBazaarReplies: state.bazSamples || [], suspectBatch: state.suspect || null, usingV1Bazaar: useV1(),
+      noBazaarReplies: state.bazSamples || [], suspectBatch: state.suspect || null, usingV1Bazaar: bazVia === 'v1',
       rawSamples: state.rawSamples, badSamples: state.badSamples, parsedSample: state.rawSamples.map(parseBuy) };
   }
 
@@ -508,17 +512,15 @@
     sset('ckpos', { t: ((pos.t || 0) + a.length) % Math.max(1, tops.length), a: ((pos.a || 0) + b.length) % Math.max(1, sellers.length) });
     return [...new Set(a.concat(b))];
   }
-  // Another player's bazaar (and name): Torn's v2 call first; if v2 answers error 7 ("Incorrect ID-entity relation"), 22 ("only
-  // in API v1") or something this script can't read, Torn's older v1 call (user/{id}?selections=...), which other tools use for
-  // other players' bazaars. Once v2 has failed like that, v1 is used first for a day (shared by every page).
-  const useV1 = () => Date.now() - (sget('bazv1', 0) || 0) < 86400000;
-  async function tornOther(id, sel, read) {
-    if (!useV1()) {
-      try { const j = await api(`user/${id}/${sel}`); if (read(j)) return j; }
-      catch (e) { if (e.code !== 7 && e.code !== 22) throw e; }
-      sset('bazv1', Date.now());
-    }
-    return apiUrl(`https://api.torn.com/user/${id}?selections=${sel}`);
+  // Another player's bazaar and name in ONE call: Torn's v1 user/{id}?selections=basic,bazaar (Torn counts a call once, however
+  // many selections it asks for). v1 is what answers for other players' bazaars (v2 says error 7 for them). If v1 answers
+  // something this script can't read, or "wrong key" (v2 tries your other key copies), Torn's v2 call is tried once.
+  let bazVia = 'v1';
+  async function tornOther(id, sels, read) {
+    try { const j = await apiUrl(`https://api.torn.com/user/${id}?selections=${sels}`, null, CHECK_RESERVE); if (read(j)) { bazVia = 'v1'; return j; } }
+    catch (e) { if (e.code === 6 || e.code === 7 || e.code === 16 || e.rate) throw e; }
+    bazVia = 'v2';
+    return api(`user/${id}/${sels.split(',').pop()}`);
   }
   // What Torn said for the last few sellers read as "no bazaar" or "no such player" (for the debug sample; never your key).
   function keepSample(id, code, j) {
@@ -532,10 +534,16 @@
     return j;
   }
   let checking = false, hurry = false;
-  // Runs fn for each id: fast = 4 at a time with no pause (Check now), otherwise one every 1.5 s, stopping early when a
-  // Check now is waiting. An error thrown by fn stops the rest.
+  // Runs fn for each id: fast = 6 on the go at once (the limiter keeps the pace), otherwise one every 1.5 s, stopping early
+  // when a Check now is waiting. An error thrown by fn stops the rest.
   async function paced(ids, fn, fast) {
-    if (fast) { for (let i = 0; i < ids.length; i += 4) await Promise.all(ids.slice(i, i + 4).map(fn)); return; }
+    if (fast) { // 6 calls on the go at once: as soon as one answers the next starts (the limiter keeps the pace)
+      let next = 0, err = null;
+      const worker = async () => { while (!err && next < ids.length) { const id = ids[next++]; try { await fn(id); } catch (e) { if (!err) err = e; } } };
+      await Promise.all(Array.from({ length: Math.min(6, ids.length) }, worker));
+      if (err) throw err;
+      return;
+    }
     for (const id of ids) { if (hurry) return; await fn(id); await sleep(CHECK_PAUSE); }
   }
   // Checks these sellers' bazaars with your key and sends the results, then looks up the names the site doesn't have yet.
@@ -558,8 +566,9 @@
     try {
       await paced(ids, async id => {
         try {
-          const j = await tornOther(id, 'bazaar', parseBazaar), b = parseBazaar(j);
+          const j = await tornOther(id, 'basic,bazaar', parseBazaar), b = parseBazaar(j), nm = parseName(j);
           if (b) results.push([id, b.is_open, b.has_bazaar, 0]);
+          if (nm) names.push([id, nm, 0]); // the name came in the same call
           if (!b || !b.has_bazaar) keepSample(id, null, j);
         } catch (e) {
           if (e.code === 6) { results.push([id, 0, 0, 1]); keepSample(id, 6, null); } // Torn: "Incorrect ID" (no such player)
@@ -589,13 +598,13 @@
     try {
       if (results.length) {
         if (!error && (keyMissing() || []).includes('user bazaar')) setMissing('user bazaar', false); // it can after all
-        const j = await postChecks({ results, p: 2 }); // p: 2 = this version's reading of Torn's answers
+        const j = await postChecks({ results, names: names.slice(0, 100), p: 2 }); // p: 2 = this version's reading of Torn's answers
         changed += j.changed || 0;
         const de0 = typeof document !== 'undefined' && document.documentElement; // the seals show now, names follow
         if (de0 && de0.hasAttribute('data-gc-userscript')) de0.setAttribute('data-gc-checkedat', String(Date.now()));
         if (posted) try { posted(results); } catch (e) { /* fine */ }
-        // names come along the first time a seller is checked (a few per round, so your key stays unhurried). They go to the
-        // site 8 at a time, so the first ones show even when the last few wait for Torn's per-minute limit.
+        // names the check didn't bring (Torn answers a private bazaar with an error, so its name doesn't come with it) are looked
+        // up on their own, a few per round, and go to the site 8 at a time.
         const need = error ? [] : (j.needName || []).slice(0, fast ? 25 : 10);
         for (let i = 0; i < need.length && !error && !hurry; i += 8) {
           const got = [];
@@ -617,8 +626,9 @@
     showKeyErr();
     return { checked: results.length, named: names.length, changed, error, kind, results }; // results: [id, open, has bazaar, gone] as seen just now
   }
-  // Check all: the sellers the page asks for, in its order, 25 at a time. The first `fast` of them go 4 at a time (your
-  // regulars, new sellers and the first cards), the rest one every 1.5 s (about 40 a minute). Before each batch the site is
+  // Check all: the sellers the page asks for, in its order, 25 at a time. The first `fast` of them go as fast as the limiter
+  // allows (the page asks this for everything you see), the rest one every 1.5 s (the quiet re-check of hidden sellers). Before
+  // each batch the site is
   // asked which of them any player checked in the last `within` seconds: those answers are used instead (the first check counts
   // for everyone). Each batch goes to the site and to the page as soon as it is done. A new request goes first (Check now), or
   // last with `later`. When Torn says to slow down it waits a minute and carries on (5 times at most).
@@ -674,7 +684,11 @@
     job.tell = tell;
     let error = null;
     while (job.queue.length) {
-      if (!(await takeLock()).mine) {
+      const fast = job.fast > 0;
+      let chunk = job.queue.slice(0, fast ? Math.min(25, job.fast) : 10); // slow batches of 10: progress every ~15 s
+      // the claim and "which did another player check lately" asked at the same time (one wait for the site, not two)
+      const [lock, seen] = await Promise.all([takeLock(), recentChecks(chunk, job.within)]);
+      if (!lock.mine) {
         // another of your devices (or tabs) is checking right now: use its results as they come, and call Torn for nothing
         const seen = await recentChecks(job.queue.slice(0, 100), job.within);
         if (seen.length) { const s1 = new Set(seen.map(x => x[0])); job.queue = job.queue.filter(x => !s1.has(x)); job.shared += seen.length; count(seen); }
@@ -682,11 +696,9 @@
         if (job.queue.length) await sleep(10000);
         continue;
       }
-      const fast = job.fast > 0;
-      let chunk = job.queue.splice(0, fast ? Math.min(25, job.fast) : 10); // slow batches of 10: progress every ~15 s
+      const taken = new Set(chunk); job.queue = job.queue.filter(x => !taken.has(x)); // (Check now may have reordered the queue meanwhile)
       if (fast) job.fast -= chunk.length;
-      const seen = await recentChecks(chunk, job.within); // another player checked these lately: use their answer
-      if (seen.length) {
+      if (seen.length) { // another player checked these lately: use their answer
         const s1 = new Set(seen.map(x => x[0]));
         chunk = chunk.filter(x => !s1.has(x));
         job.shared += seen.length; count(seen);
