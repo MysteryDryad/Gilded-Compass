@@ -601,6 +601,7 @@
     try {
       if (results.length) {
         if (!error && (keyMissing() || []).includes('user bazaar')) setMissing('user bazaar', false); // it can after all
+        matchKeyCopy(); // Torn just answered with the shared key: this page's own copy follows it
         const j = await postChecks({ results, names: names.slice(0, 100), p: 2 }); // p: 2 = this version's reading of Torn's answers
         changed += j.changed || 0;
         const de0 = typeof document !== 'undefined' && document.documentElement; // the seals show now, names follow
