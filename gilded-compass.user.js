@@ -591,14 +591,20 @@
         const de0 = typeof document !== 'undefined' && document.documentElement; // the seals show now, names follow
         if (de0 && de0.hasAttribute('data-gc-userscript')) de0.setAttribute('data-gc-checkedat', String(Date.now()));
         if (posted) try { posted(results); } catch (e) { /* fine */ }
-        // names come along the first time a seller is checked (a few per round, so your key stays unhurried)
-        if (!error) {
-          await paced((j.needName || []).slice(0, fast ? 25 : 10), async id => {
-            try { const nm = parseName(await tornOther(id, 'basic', parseName)); if (nm) names.push([id, nm, 0]); }
-            catch (e) { if (e.code === 6) names.push([id, '(not found)', 1]); else if (e.code === 7) { /* not "no such player": try again later */ } else if (e.code || e.rate) throw tornError(e); }
+        // names come along the first time a seller is checked (a few per round, so your key stays unhurried). They go to the
+        // site 8 at a time, so the first ones show even when the last few wait for Torn's per-minute limit.
+        const need = error ? [] : (j.needName || []).slice(0, fast ? 25 : 10);
+        for (let i = 0; i < need.length && !error && !hurry; i += 8) {
+          const got = [];
+          await paced(need.slice(i, i + 8), async id => {
+            try { const nm = parseName(await tornOther(id, 'basic', parseName)); if (nm) got.push([id, nm, 0]); }
+            catch (e) { if (e.code === 6) got.push([id, '(not found)', 1]); else if (e.code === 7) { /* not "no such player": try again later */ } else if (e.code || e.rate) throw tornError(e); }
           }, fast).catch(e => { error = hideKey(e.message || e); kind = e.rate ? 'rate' : e.stop || e.code === 2 ? 'key' : 'other'; });
+          if (!got.length) continue;
+          names.push(...got);
+          changed += (await postChecks({ names: got })).changed || 0;
+          if (posted) try { posted([]); } catch (e) { /* the page fetches the new names */ }
         }
-        if (names.length) changed += (await postChecks({ names })).changed || 0;
       }
     } catch (e) { error = error || hideKey(e.message || e); }
     checking = false;
