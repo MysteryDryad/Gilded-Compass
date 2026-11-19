@@ -67,8 +67,11 @@
       catch (e) { /* keep this page's own copy */ }
     }
     for (const k of SHARED) if (!(k in cache)) { const v = sgetLocal(k, null); if (v != null) sset(k, v); } // first run after updating: copy across
-    // this page's own copy of the key follows the shared one (the one used), so the two copies never drift apart
-    try { const k = cache.apikey; if (typeof k === 'string' && /^[A-Za-z0-9]{16}$/.test(k) && sgetLocal('apikey', '') !== k) { if (hasGM) GM_setValue(NS + 'apikey', JSON.stringify(k)); else localStorage.setItem(NS + 'apikey', JSON.stringify(k)); } } catch (e) { /* fine */ }
+  }
+  // After the shared key has just worked with Torn, this page's own copy follows it, so the two copies stop drifting apart. (Not
+  // at load: the shared copy can be an old, deleted key while this page's copy is the one that works; recoverKey needs it.)
+  function matchKeyCopy() {
+    try { const k = sget('apikey', ''); if (typeof k === 'string' && /^[A-Za-z0-9]{16}$/.test(k) && sgetLocal('apikey', '') !== k) { if (hasGM) GM_setValue(NS + 'apikey', JSON.stringify(k)); else localStorage.setItem(NS + 'apikey', JSON.stringify(k)); } } catch (e) { /* fine */ }
   }
   function sget(k, d) {
     if (k in cache) return cache[k] == null || cache[k] === '' ? d : cache[k];
@@ -393,7 +396,7 @@
         }
       }
       if (Object.keys(state.pending).length || (firstSync && added)) await sendToSite(firstSync && added ? 'first' : false);
-      state.lastError = null; state.needsSetup = false; state.syncedAt = Date.now(); save(); shareSync(); setStatus('');
+      state.lastError = null; state.needsSetup = false; state.syncedAt = Date.now(); save(); shareSync(); setStatus(''); matchKeyCopy();
       // everything up to here is read and sent: your other devices can start from here
       if (state.lastSync > ((site && site.syncedTo) || 0) && !state.resume && !Object.keys(state.pending).length) reportSynced(state.lastSync);
       itemsIfDue();
