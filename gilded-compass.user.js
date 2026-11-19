@@ -536,7 +536,8 @@
     for (const id of ids) { if (hurry) return; await fn(id); await sleep(CHECK_PAUSE); }
   }
   // Checks these sellers' bazaars with your key and sends the results, then looks up the names the site doesn't have yet.
-  async function checkBazaars(ids, fast) {
+  // `posted(results)` (optional) hears the bazaar answers as soon as the site has them, before the names are looked up.
+  async function checkBazaars(ids, fast, posted) {
     if (checking && fast) { hurry = true; for (let i = 0; checking && i < 150; i++) await sleep(200); }
     if (checking) return { busy: true };
     hurry = false;
@@ -563,10 +564,6 @@
           else if (e.code || e.rate) throw tornError(e);
         }
       }, fast);
-      if (ids.length >= 4 && !results.length && !hurry) {
-        const last = (state.bazSamples || []).slice(-1)[0] || {};
-        throw Object.assign(new Error(`Torn gave no usable answer for these bazaars${last.code ? ' (error ' + last.code + ')' : ''}. Try Check now later; if it keeps happening, send the debug sample from ⚙.`), { code: last.code || 99 });
-      }
       // A batch where most sellers suddenly have "no bazaar" (or no account) is not believable (Torn having a bad moment, or a
       // key problem): those answers are not recorded, so nobody's list empties. Open/closed answers in it still count.
       const odd = results.filter(r => !r[2] || r[3] === 1); // (a private bazaar is a real answer, not an odd one)
@@ -574,12 +571,26 @@
         state.suspect = { at: Date.now(), of: results.length, odd: odd.length };
         for (let i = results.length - 1; i >= 0; i--) if (!results[i][2] || results[i][3] === 1) results.splice(i, 1);
       }
+      // The same for "private": a few players keep their bazaar private, but most of a batch at once means Torn (or the key) is
+      // refusing, not that everyone went private.
+      const priv = results.filter(r => r[3] === 2);
+      if (results.length >= 8 && priv.length * 2 > results.length) {
+        state.suspect = { at: Date.now(), of: results.length, private: priv.length };
+        for (let i = results.length - 1; i >= 0; i--) if (results[i][3] === 2) results.splice(i, 1);
+      }
+      if (ids.length >= 4 && !results.length && !hurry) {
+        const last = (state.bazSamples || []).slice(-1)[0] || {};
+        throw Object.assign(new Error(`Torn gave no usable answer for these bazaars${last.code ? ' (error ' + last.code + ')' : ''}. Try Check now later; if it keeps happening, send the debug sample from ⚙.`), { code: last.code || 99 });
+      }
     } catch (e) { error = hideKey(e.message || e); kind = e.rate ? 'rate' : e.stop || e.code === 2 ? 'key' : 'other'; }
     try {
       if (results.length) {
         if (!error && (keyMissing() || []).includes('user bazaar')) setMissing('user bazaar', false); // it can after all
         const j = await postChecks({ results, p: 2 }); // p: 2 = this version's reading of Torn's answers
         changed += j.changed || 0;
+        const de0 = typeof document !== 'undefined' && document.documentElement; // the seals show now, names follow
+        if (de0 && de0.hasAttribute('data-gc-userscript')) de0.setAttribute('data-gc-checkedat', String(Date.now()));
+        if (posted) try { posted(results); } catch (e) { /* fine */ }
         // names come along the first time a seller is checked (a few per round, so your key stays unhurried)
         if (!error) {
           await paced((j.needName || []).slice(0, fast ? 25 : 10), async id => {
@@ -673,7 +684,7 @@
         tell(seen);
       }
       if (!chunk.length) continue;
-      const r = await checkBazaars(chunk, fast);
+      const r = await checkBazaars(chunk, fast, res => { count(res); tell(res); }); // seals show before the names are looked up
       if (r.busy) { job.queue = chunk.concat(job.queue); await sleep(2000); continue; }
       const got = new Set((r.results || []).map(x => x[0]));
       count(r.results); job.changed += r.changed || 0;
