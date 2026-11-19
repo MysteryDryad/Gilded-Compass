@@ -98,7 +98,9 @@ Since userscript 0.5.0 / schema v5 the site never calls Torn for bazaars. Each p
   (the page shows "N already checked recently").
 - Requests: `gc:checkall` with `data-gc-checkall` = {ids, fast, within, later}: the first `fast` go 6 at once as fast as the
   limiter allows (the page sends `fast` = all of them), the rest 10 per batch at one call every 1.5 s; a request goes to the
-  front (or the end with `later`) of a check in progress, and a slow batch in progress stops early for it.
+  front (or the end with `later`) of a check in progress, and a slow batch in progress stops early for it. Each queued seller
+  is fast or slow (`job.slow`) and keeps that through a rate-limit wait or a retry; fast ones always go first. A seller a batch
+  didn't get to goes back in line (never dropped); one whose answer couldn't be read is tried once more.
 - Each batch goes to the site (`POST /api/bazaar`) and to the page (`gc:checkpart`: {results (each [id, open, has bazaar, gone,
   ck?]), done, total, changed, shared, finished, error}); the page applies results at once, refreshes from the site, and shows
   "Checking bazaars… 40 of 115", then "Checked 115 bazaars (40 already checked recently, 12 changed)".

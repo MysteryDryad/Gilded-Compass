@@ -557,7 +557,7 @@
     if (!cfg.ready()) return { error: 'Set up the 🧭 userscript on Torn first.' };
     if (!ids.length) return { checked: 0, changed: 0 };
     checking = true;
-    const results = [], names = [];
+    const results = [], names = [], tried = new Set();
     let error = null, changed = 0, kind = null; // kind: 'rate' (Torn said slow down), 'key' (the key can't), 'other'
     const tornError = e => {
       if (e.code === 16) { setMissing('user bazaar', true); return Object.assign(new Error(missingText(['user bazaar'], false)), { stop: true }); }
@@ -567,6 +567,7 @@
     };
     try {
       await paced(ids, async id => {
+        tried.add(id);
         try {
           const j = await tornOther(id, 'basic,bazaar', parseBazaar), b = parseBazaar(j), nm = parseName(j);
           if (b) results.push([id, b.is_open, b.has_bazaar, 0]);
@@ -628,7 +629,7 @@
     const de = typeof document !== 'undefined' && document.documentElement;
     if (de && de.hasAttribute('data-gc-userscript')) de.setAttribute('data-gc-checkedat', String(state.lastCheckAt));
     showKeyErr();
-    return { checked: results.length, named: names.length, changed, error, kind, results }; // results: [id, open, has bazaar, gone] as seen just now
+    return { checked: results.length, named: names.length, changed, error, kind, results, tried: [...tried] }; // results: [id, open, has bazaar, gone] as seen just now
   }
   // Check all: the sellers the page asks for, in its order, 25 at a time. The first `fast` of them go as fast as the limiter
   // allows (the page asks this for everything you see), the rest one every 1.5 s (the quiet re-check of hidden sellers). Before
@@ -640,16 +641,19 @@
   function checkAll(ids, fast, within, later) {
     ids = [...new Set((ids || []).map(Number).filter(x => x > 0))];
     within = Math.max(0, Number(within) || 0);
+    const nFast = Math.max(0, Number(fast) || 0);
     if (allJob) { // already checking
-      const these = new Set(ids), rest = allJob.queue.filter(x => !these.has(x));
+      const these = new Set(ids), queued = new Set(allJob.queue), rest = allJob.queue.filter(x => !these.has(x));
       allJob.queue = later ? rest.concat(ids) : ids.concat(rest);
       ids.forEach(x => allJob.within.set(x, within));
-      if (!later) { allJob.fast = Math.max(allJob.fast, fast || 0); hurry = true; } // a slow batch in progress stops early
+      // the first `fast` are checked fast (even if they were waiting as slow ones); a slow one already waiting as fast stays fast
+      ids.forEach((x, i) => { if (i < nFast) allJob.slow.delete(x); else if (!queued.has(x)) allJob.slow.add(x); });
+      if (!later) hurry = true; // a slow batch in progress stops early
       allJob.total = allJob.done + new Set(allJob.queue.filter(x => !allJob.doneIds.has(x))).size;
       if (allJob.tell) allJob.tell([]); // the page shows the new total straight away
       return;
     }
-    allJob = { queue: ids, within: new Map(ids.map(x => [x, within])), fast: fast || 0, done: 0, total: ids.length, changed: 0, shared: 0,
+    allJob = { queue: ids, within: new Map(ids.map(x => [x, within])), slow: new Set(ids.slice(nFast)), done: 0, total: ids.length, changed: 0, shared: 0,
       waits: 0, fails: 0, tries: new Map(), doneIds: new Set() };
     runAll();
   }
@@ -696,8 +700,9 @@
     job.tell = tell;
     let error = null;
     while (job.queue.length) {
-      const fast = job.fast > 0;
-      let chunk = job.queue.slice(0, fast ? Math.min(25, job.fast) : 10); // slow batches of 10: progress every ~15 s
+      // fast ones first, always (25 a batch); slow ones (the quiet re-check of hidden sellers) when none are left, 10 a batch
+      const fast = job.queue.some(x => !job.slow.has(x));
+      let chunk = job.queue.filter(x => job.slow.has(x) !== fast).slice(0, fast ? 25 : 10);
       // the claim and "which did another player check lately" asked at the same time (one wait for the site, not two)
       const [lock, seen] = await Promise.all([takeLock(), recentChecks(chunk, job.within)]);
       if (!lock.mine) {
@@ -709,7 +714,6 @@
         continue;
       }
       const taken = new Set(chunk); job.queue = job.queue.filter(x => !taken.has(x)); // (Check now may have reordered the queue meanwhile)
-      if (fast) job.fast -= chunk.length;
       if (seen.length) { // another player checked these lately: use their answer
         const s1 = new Set(seen.map(x => x[0]));
         chunk = chunk.filter(x => !s1.has(x));
@@ -735,10 +739,13 @@
         tell(r.results); break;
       }
       job.fails = 0;
-      // sellers a batch skipped (it stopped early for Check now, or Torn's answer had an unknown shape): once more, at the end
-      const skipped = chunk.filter(x => !got.has(x) && (job.tries.get(x) || 0) < 1);
-      skipped.forEach(x => job.tries.set(x, (job.tries.get(x) || 0) + 1));
-      job.queue = job.queue.concat(skipped);
+      // sellers a batch didn't get to (it stopped early for Check now) go back in line; one whose answer had an unknown shape is
+      // tried once more, at the end
+      const tried = new Set(r.tried || chunk);
+      const notTried = chunk.filter(x => !got.has(x) && !tried.has(x));
+      const odd = chunk.filter(x => !got.has(x) && tried.has(x) && (job.tries.get(x) || 0) < 1);
+      odd.forEach(x => job.tries.set(x, (job.tries.get(x) || 0) + 1));
+      job.queue = job.queue.concat(notTried, odd);
       count([]);
       tell(r.results);
     }
