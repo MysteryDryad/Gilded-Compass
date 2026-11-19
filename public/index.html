@@ -632,6 +632,12 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
   document.addEventListener('gc:checkpart', () => {
     let p = {}; try { p = JSON.parse(document.documentElement.getAttribute('data-gc-check-part') || '{}'); } catch (e) { return; }
     takeResults(p);
+    if (p.partial) { // answers straight from Torn while a batch is still going (0.5.13+): just show them
+      if (!CHK.running) return; // (a late one after the check ended)
+      Object.assign(CHK, { done: Math.max(CHK.done, p.done || 0), total: Math.max(CHK.total, p.total || 0, p.done || 0) });
+      showCheck(); renderStrip();
+      return;
+    }
     Object.assign(CHK, { done: p.done || 0, total: Math.max(p.total || 0, p.done || 0), changed: p.changed || 0, shared: p.shared || 0, running: !p.finished,
       error: p.error || null, waiting: !!p.waiting, other: !!p.other }); // all only about this moment: they go as soon as it moves on
     showCheck(); renderStrip();

@@ -29,7 +29,10 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
   rounds that wait for the slowest), the limiter allows 60 a minute (5 kept back for log reads and key checks), the page asks
   for every card it shows at full speed (only the quiet re-check of hidden sellers goes slowly), each batch asks the site for
   the lock and for recent checks at the same time, Check now starts the bazaar checks while the log is read (new sellers join
-  the front), the shared storage is read all at once, and log pages are 0.4 s apart (was 1.2 s).
+  the front), the shared storage is read all at once, and log pages are 0.4 s apart (was 1.2 s). Each plain open/closed
+  answer goes to the page the moment Torn gives it (`gc:checkpart` with `partial: true`, gathered for 0.3 s; the page shows
+  it without refreshing from the site). The page's key check (`gc:keycheck`) is answered at once from `keychk` when this key
+  passed in the last 6 hours (re-asked quietly when over 30 minutes old), so the list no longer waits for Torn to open.
 - **Private bazaars (0.5.12)**: Torn's error 7 means "A requested selection is private": that player's bazaar can't be read by
   any key. The result is stored as `missing = 2` (0 = fine, 1 = no such player); the card shows a dotted "Private" seal, stays on
   the list (you bought from their bazaar), and counts as neither open nor closed (filters and "Open now" leave it out).

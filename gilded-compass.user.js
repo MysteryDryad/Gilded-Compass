@@ -548,7 +548,9 @@
   }
   // Checks these sellers' bazaars with your key and sends the results, then looks up the names the site doesn't have yet.
   // `posted(results)` (optional) hears the bazaar answers as soon as the site has them, before the names are looked up.
-  async function checkBazaars(ids, fast, posted) {
+  // `live(result)` (optional) hears each plain open/closed answer the moment Torn gives it, so its card can update at once
+  // ("no bazaar", "private" and "no such player" wait for the batch: a batch full of them is not believed).
+  async function checkBazaars(ids, fast, posted, live) {
     if (checking && fast) { hurry = true; for (let i = 0; checking && i < 150; i++) await sleep(200); }
     if (checking) return { busy: true };
     hurry = false;
@@ -568,6 +570,7 @@
         try {
           const j = await tornOther(id, 'basic,bazaar', parseBazaar), b = parseBazaar(j), nm = parseName(j);
           if (b) results.push([id, b.is_open, b.has_bazaar, 0]);
+          if (b && b.has_bazaar && live) try { live([id, b.is_open, 1, 0]); } catch (e) { /* fine */ }
           if (nm) names.push([id, nm, 0]); // the name came in the same call
           if (!b || !b.has_bazaar) keepSample(id, null, j);
         } catch (e) {
@@ -676,11 +679,19 @@
     const job = allJob, de = document.documentElement;
     const count = list => { (list || []).forEach(x => job.doneIds.add(Number(x[0]))); job.done = job.doneIds.size; // each seller once
       job.total = job.done + new Set(job.queue.filter(x => !job.doneIds.has(x))).size; };
-    const tell = (part, finished, error, waiting, other) => {
+    const tell = (part, finished, error, waiting, other, partial) => {
       de.setAttribute('data-gc-check-part', JSON.stringify({ results: part || [], done: job.done, total: job.total, changed: job.changed,
-        shared: job.shared, finished: !!finished, error: error || null, waiting: !!waiting, other: !!other }));
+        shared: job.shared, finished: !!finished, error: error || null, waiting: !!waiting, other: !!other, partial: !!partial }));
       document.dispatchEvent(new Event('gc:checkpart'));
     };
+    // answers straight from Torn, gathered for 0.3 s and shown on the page (partial: the page doesn't refresh from the site
+    // for these); the batch's full answer follows once the site has it
+    let liveBuf = [], liveT = null;
+    const live = r => {
+      liveBuf.push(r);
+      if (!liveT) liveT = setTimeout(() => { liveT = null; const b = liveBuf; liveBuf = []; count(b); tell(b, false, null, false, false, true); }, 300);
+    };
+    const liveStop = () => { clearTimeout(liveT); liveT = null; liveBuf = []; };
     job.tell = tell;
     let error = null;
     while (job.queue.length) {
@@ -705,7 +716,8 @@
         tell(seen);
       }
       if (!chunk.length) continue;
-      const r = await checkBazaars(chunk, fast, res => { count(res); tell(res); }); // seals show before the names are looked up
+      const r = await checkBazaars(chunk, fast, res => { liveStop(); count(res); tell(res); }, live); // seals show before the names are looked up
+      liveStop();
       if (r.busy) { job.queue = chunk.concat(job.queue); await sleep(2000); continue; }
       const got = new Set((r.results || []).map(x => x[0]));
       count(r.results); job.changed += r.changed || 0;
@@ -979,10 +991,18 @@
     de.setAttribute('data-gc-userscript', VERSION);
     if (state.lastCheckAt) de.setAttribute('data-gc-checkedat', String(state.lastCheckAt));
     showKeyErr();
-    // the page asks whether your key has everything it needs before it shows your list (checked fresh, one call to Torn)
+    // the page asks whether your key has everything it needs before it shows your list. If this key passed in the last 6 hours
+    // the answer is given at once (the list opens without waiting for Torn) and Torn is asked again quietly when the last
+    // look is over 30 minutes old; a key that lost something is also caught by the bazaar checks themselves.
     document.addEventListener('gc:keycheck', async () => {
       let res;
-      try { res = cfg.ready() ? await checkKey() : { missing: [], known: false, nokey: true }; } catch (e) { res = { error: hideKey(e.message || e), wrong: e.code === 2 }; }
+      const kc = sget('keychk', null), age = kc ? Date.now() - (kc.at || 0) : Infinity;
+      if (cfg.ready() && kc && kc.tag === keyTag(cfg.key()) && Array.isArray(kc.missing) && !kc.missing.length && age < 6 * 3600000) {
+        res = { missing: [], known: true, cached: true };
+        if (age > 30 * 60000) checkKey().catch(() => {});
+      } else {
+        try { res = cfg.ready() ? await checkKey() : { missing: [], known: false, nokey: true }; } catch (e) { res = { error: hideKey(e.message || e), wrong: e.code === 2 }; }
+      }
       if (res.missing && res.missing.length) res.text = missingText(res.missing, false).split('. ')[0] + '.'; // just what is missing
       de.setAttribute('data-gc-keycheck-result', JSON.stringify(res));
       document.dispatchEvent(new Event('gc:keychecked'));
