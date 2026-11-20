@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gilded Compass
 // @namespace    gilded-compass
-// @version      0.5.13
+// @version      0.5.14
 // @description  Ranks the Torn bazaar sellers you buy from and shows whose bazaar is open. Reads your bazaar purchases and checks those sellers' bazaars with your own key, and sends the results to the Gilded Compass site (only you see your purchases). Read-only, never acts in the game.
 // @author       MysteryDryad
 // @homepageURL  https://github.com/MysteryDryad/Gilded-Compass
@@ -49,7 +49,7 @@
   const NS = 'gc_';
   const PDA_KEY = '###PDA-APIKEY###';
   const IN_PDA = PDA_KEY[0] !== '#';
-  const VERSION = '0.5.13'; // keep equal to @version above (test.js checks this)
+  const VERSION = '0.5.14'; // keep equal to @version above (test.js checks this)
   const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   const PAUSE = 400;                // ms between log pages (the Torn limiter below keeps the overall pace)
   const AUTO_EVERY = 15 * 60000;    // background sync interval while Torn is open
@@ -156,15 +156,26 @@
   // Torn allows 100 calls a minute for everything that uses your key (Torn PDA, other scripts, this one). This script keeps to
   // 60 a minute of its own, and to 30 for 10 minutes after Torn says "too many". Bazaar checks leave the last 5 of those for
   // your log and key checks (`reserve`), so a long check never holds up reading your log.
+  // Bazaar checks go at full speed until only the last 10 of the minute's share are left; those are spread out evenly until the
+  // oldest call is a minute old and frees its place. So a long check never stands still for most of a minute (it moves on
+  // every few seconds instead), and it still finishes in about the same time.
   const tornTimes = [];
-  let tornSlowUntil = 0;
-  const CHECK_RESERVE = 5;
+  let tornSlowUntil = 0, dripAt = 0;
+  const CHECK_RESERVE = 5, DRIP = 10;
   async function tornSlot(reserve) {
     for (;;) {
       const t = Date.now(), max = (t < tornSlowUntil ? 30 : 60) - (reserve || 0);
       while (tornTimes.length && t - tornTimes[0] >= 60000) tornTimes.shift();
-      if (tornTimes.length < max) { tornTimes.push(t); return; }
-      await sleep(60000 - (t - tornTimes[tornTimes.length - max]) + 50);
+      const n = tornTimes.length;
+      let wait = 0;
+      if (n >= max) wait = 60000 - (t - tornTimes[n - max]) + 50; // the minute's share is used up
+      else if (reserve && n >= max - DRIP && t < dripAt) wait = dripAt - t; // the last few of a check's share: spread out
+      if (wait <= 0) {
+        tornTimes.push(t);
+        if (reserve && tornTimes.length >= max - DRIP) dripAt = t + Math.max(0, tornTimes[0] + 60000 - t) / (max - tornTimes.length + 1);
+        return;
+      }
+      await sleep(Math.min(wait, 1000)); // looked at again every second (a call can free its place sooner)
     }
   }
   async function apiUrl(url, key, reserve) {

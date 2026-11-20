@@ -22,6 +22,11 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 - Only sellers **with a bazaar** are ever on the site. A seller found to have no bazaar (or a deleted account) is never shown or
   counted. They are re-checked quietly (on page open, up to 30, only if nobody checked them in the last day; shared), and a
   purchase from their bazaar made after that brings them back (the upload sets `has_bazaar = 1`, with `t`/`u` = now).
+- **Steady checks (0.5.14)**: `tornSlot()` lets bazaar checks (`reserve` > 0) go at full speed until only the last `DRIP` (10)
+  of the minute's check share (55) are left, then spreads those evenly until the oldest call in the window is a minute old
+  (`dripAt`). A long check used to burst ~50 calls and then stand still for most of a minute ("hangs at 46 / 54"); now it
+  moves on every ~5 s and finishes in about the same time (simulated: 100 sellers 64 s → 67 s, 150 sellers 124 s either way;
+  longest pause 55 s → 5 s). The hard cap (60 a minute, 30 after "too many") is unchanged.
 - **Remembered filters (page only)**: the item types, Open/Closed and Visited picked last come back when the page opens again
   (`localStorage` `gc_filters` = {chips, baz, visit}, saved on every change and on Clear all; unknown values are ignored; the
   sort box was already remembered in `gc_sort`; the search box starts empty). A remembered type with nothing in it now still
