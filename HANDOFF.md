@@ -32,6 +32,11 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
   5 s. So most sizes finish as fast as before; a few just under a full minute's share finish later instead of standing still
   (spreading calls out uses next minute's room: a fundamental trade-off). The hard cap (60 a minute, 30 after "too many") is
   unchanged.
+- **Visited = recently (page only)**: the Visited / Not visited filters use `glowing(id)`: a visit within the glow time chosen in
+  ⚙ (`gc_span`: 30 min, 1 hour, 4 hours, 1 day) and after Reset glow (`gc_resetAt`). They used to count any visit ever made on
+  this device, which a phone can't show (the card's "✓ visited" line is hidden on phones), so "Not visited" looked wrong. The
+  20-s glow tick (`refreshGlow`) re-renders when the filter is on and someone moved between the two (a new visit, or a visit
+  past the glow time); a changed glow time or Reset glow applies at once. Sort by "last visited" still uses every visit.
 - **Remembered filters (page only)**: the item types, Open/Closed and Visited picked last come back when the page opens again
   (`localStorage` `gc_filters` = {chips, baz, visit}, saved on every change and on Clear all; unknown values are ignored; the
   sort box was already remembered in `gc_sort`; the search box starts empty). A remembered type with nothing in it now still

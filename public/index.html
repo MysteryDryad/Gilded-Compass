@@ -330,14 +330,15 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
 
       <div class="sv-card">
         <h3>Visits</h3>
-        <p>Sellers you open from this page glow for a while, so you can see who you've already visited.</p>
+        <p>Sellers you open from this page glow for a while, and while they glow they count as <b>Visited</b> in the filters. So
+          "Not visited" shows the ones you haven't opened yet: for a daily run, pick 1 day.</p>
         <div class="sv-row">
-          <label class="lbl">Glow after a visit for
+          <label class="lbl">Glow (and count as visited) for
             <select id="span"><option value="1800">30 min</option><option value="3600">1 hour</option><option value="14400">4 hours</option><option value="86400">1 day</option></select>
           </label>
         </div>
         <div class="sv-row">
-          <button class="btn small" id="resetHl" title="Turn the glow off now; visit times are kept">Reset glow</button>
+          <button class="btn small" id="resetHl" title="Start fresh: the glow goes off and nobody counts as visited (visit times are kept)">Reset glow</button>
           <button class="btn small" id="clearVisits" title="Forget all visit times">Clear visit marks</button>
         </div>
       </div>
@@ -481,7 +482,10 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     return `<span class="seal ${b}" title="${esc(tip)}"><i></i>${SEAL[b] || ''}</span>`;
   }
   function visitedAt(id) { return visits[id] || 0; }
+  // Visited "recently": within the glow time chosen in ⚙ and since Reset glow. The card glows and the Visited / Not visited
+  // filters count it as visited (a visit before that only shows on the card's "✓ visited" line, on a computer).
   function glowing(id) { const v = visitedAt(id); return v > resetAt && Date.now() - v < span * 1000; }
+  const spanText = () => ({ 1800: '30 minutes', 3600: 'hour', 14400: '4 hours', 86400: 'day' })[span] || Math.round(span / 60) + ' minutes';
   const profile = id => 'https://www.torn.com/profiles.php?XID=' + id;
   const bazaar = id => 'https://www.torn.com/bazaar.php?userId=' + id + '#/'; // the id goes before the # (Torn ignores it after #); #/ on the end
 
@@ -507,8 +511,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
       const b = baz(id);
       if (st.baz === 'open' && b !== 'open') return false;
       if (st.baz === 'closed' && b !== 'closed') return false;
-      if (st.visit === 'yes' && !visitedAt(id)) return false;
-      if (st.visit === 'no' && visitedAt(id)) return false;
+      if (st.visit === 'yes' && !glowing(id)) return false;
+      if (st.visit === 'no' && glowing(id)) return false;
       return true;
     });
     const ORDER = { open: 0, closed: 1, unchecked: 2 };
@@ -569,7 +573,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     const unchecked = st.baz !== 'any' ? DATA.sellers.filter(s => baz(s.id) === 'unchecked').length : 0;
     let t = picked.length ? `No sellers match ${esc(picked.join(' + '))}` + (picked.length > 1 ? ' together' : '') : 'No sellers match this search';
     if (unchecked) t += `: ${fmt(unchecked)} of your sellers haven't been checked yet, so they can't count as ${st.baz} yet. Press Check now`;
-    else if (st.visit === 'yes') t += '. "Visited" lists the sellers you opened from this list on this device';
+    else if (st.visit === 'yes') t += `. "Visited" lists the sellers you opened from this list on this device in the last ${spanText()} (change it in ⚙)`;
     return t + '.' + (picked.length ? ' <button class="btn small" data-clearall>Clear all filters</button>' : '');
   }
   // Re-render, but never while a click is in progress (replacing cards under a click can cancel it).
@@ -726,7 +730,8 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     if (Date.now() >= busyUntil) renderStrip();
     renderBearings(); renderStatus();
   }
-  // Every 20 s: glow classes and "visited" text only, cards are never replaced.
+  // Every 20 s (and after a visit or a change in ⚙): glow classes and "visited" text. Cards are replaced only when the Visited or
+  // Not visited filter is on and someone moved between the two (a new visit, or a visit older than the glow time).
   function refreshGlow() {
     document.querySelectorAll('.cardx').forEach(c => {
       const id = Number(c.dataset.id), v = visitedAt(id);
@@ -734,6 +739,13 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
       c.querySelector('.visit').textContent = v ? '✓ visited ' + agoMs(v) : '';
     });
     document.querySelectorAll('.reg').forEach(r => r.classList.toggle('hl', glowing(Number(r.dataset.id))));
+    visitTitles();
+    if (st.visit !== 'any' && compute().map(x => x.s.id).join() !== list.map(x => x.s.id).join()) renderSoon();
+  }
+  function visitTitles() { // the filter buttons say what counts as visited
+    const b = document.querySelector('[data-visit="yes"]'), n = document.querySelector('[data-visit="no"]');
+    if (b) b.title = `Opened from this list in the last ${spanText()} (the glow time in ⚙)`;
+    if (n) n.title = `Not opened from this list in the last ${spanText()}`;
   }
 
   /* ---------- data ---------- */
@@ -970,7 +982,7 @@ body.in-settings #app > :not(#settingsView) { display: none !important; }
     document.querySelectorAll('[data-baz]').forEach(x => x.setAttribute('aria-pressed', x.dataset.baz === st.baz));
     document.querySelectorAll('[data-visit]').forEach(x => x.setAttribute('aria-pressed', x.dataset.visit === st.visit));
   };
-  syncSegs();
+  syncSegs(); visitTitles();
   document.querySelectorAll('[data-baz]').forEach(b => b.addEventListener('click', () => {
     st.baz = b.dataset.baz; st.shown = PAGE; saveFilters(); syncSegs(); render();
   }));
