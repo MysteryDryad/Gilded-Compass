@@ -25,8 +25,13 @@ Tests: `node test.js` (no installs). All work and pushes go to `main`.
 - **Steady checks (0.5.14)**: `tornSlot()` lets bazaar checks (`reserve` > 0) go at full speed until only the last `DRIP` (10)
   of the minute's check share (55) are left, then spreads those evenly until the oldest call in the window is a minute old
   (`dripAt`). A long check used to burst ~50 calls and then stand still for most of a minute ("hangs at 46 / 54"); now it
-  moves on every ~5 s and finishes in about the same time (simulated: 100 sellers 64 s → 67 s, 150 sellers 124 s either way;
-  longest pause 55 s → 5 s). The hard cap (60 a minute, 30 after "too many") is unchanged.
+  moves on every ~5 s. They go at once when everything still waiting fits in the free share (`checksLeft()` = the batch's
+  checks not yet let through, `checkWait`, plus the job's queue), or when finishing in the next minute's burst needs them used
+  now (R > 55 and R <= free + 55, keeping at least 4 spread out). Simulated (finish / longest pause, before → now): 100 checks
+  64 s / 56 s → 64 s / 5 s; 105: 64 → 65 s / 9 s; 110: 65 → 109 s / 11 s; 150: 123 → 124 s / 5 s; 160-165: 125 → 150-176 s /
+  5 s. So most sizes finish as fast as before; a few just under a full minute's share finish later instead of standing still
+  (spreading calls out uses next minute's room: a fundamental trade-off). The hard cap (60 a minute, 30 after "too many") is
+  unchanged.
 - **Remembered filters (page only)**: the item types, Open/Closed and Visited picked last come back when the page opens again
   (`localStorage` `gc_filters` = {chips, baz, visit}, saved on every change and on Clear all; unknown values are ignored; the
   sort box was already remembered in `gc_sort`; the search box starts empty). A remembered type with nothing in it now still

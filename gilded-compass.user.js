@@ -158,10 +158,13 @@
   // your log and key checks (`reserve`), so a long check never holds up reading your log.
   // Bazaar checks go at full speed until only the last 10 of the minute's share are left; those are spread out evenly until the
   // oldest call is a minute old and frees its place. So a long check never stands still for most of a minute (it moves on
-  // every few seconds instead), and it still finishes in about the same time.
+  // every few seconds instead). They go at once when everything still waiting fits in what's left, or when finishing in the next
+  // minute's burst needs them used now (keeping at least 4 spread out): so most checks finish as fast as before, and the few
+  // sizes that can't (about 106-110 checks) finish a little later instead of standing still.
   const tornTimes = [];
-  let tornSlowUntil = 0, dripAt = 0;
+  let tornSlowUntil = 0, dripAt = 0, checkWait = 0; // checkWait: checks of the batch in progress not yet let through
   const CHECK_RESERVE = 5, DRIP = 10;
+  const checksLeft = () => checkWait + (allJob ? allJob.queue.length : 0); // bazaar checks still waiting for their turn
   async function tornSlot(reserve) {
     for (;;) {
       const t = Date.now(), max = (t < tornSlowUntil ? 30 : 60) - (reserve || 0);
@@ -169,9 +172,13 @@
       const n = tornTimes.length;
       let wait = 0;
       if (n >= max) wait = 60000 - (t - tornTimes[n - max]) + 50; // the minute's share is used up
-      else if (reserve && n >= max - DRIP && t < dripAt) wait = dripAt - t; // the last few of a check's share: spread out
+      else if (reserve && n >= max - DRIP && t < dripAt) { // the last few of a check's share: spread out, unless...
+        const R = checksLeft(), F = max - n;
+        if (!(R <= F || (R > max && R <= F + max && F > 4))) wait = dripAt - t; // ...what's left fits now, or the next burst needs it
+      }
       if (wait <= 0) {
         tornTimes.push(t);
+        if (reserve && checkWait > 0) checkWait--;
         if (reserve && tornTimes.length >= max - DRIP) dripAt = t + Math.max(0, tornTimes[0] + 60000 - t) / (max - tornTimes.length + 1);
         return;
       }
@@ -576,6 +583,7 @@
       if (e.code === 2) state.needsSetup = true;
       return e;
     };
+    checkWait = ids.length;
     try {
       await paced(ids, async id => {
         tried.add(id);
@@ -591,6 +599,7 @@
           else if (e.code || e.rate) throw tornError(e);
         }
       }, fast);
+      checkWait = 0;
       // A batch where most sellers suddenly have "no bazaar" (or no account) is not believable (Torn having a bad moment, or a
       // key problem): those answers are not recorded, so nobody's list empties. Open/closed answers in it still count.
       const odd = results.filter(r => !r[2] || r[3] === 1); // (a private bazaar is a real answer, not an odd one)
@@ -635,7 +644,7 @@
         }
       }
     } catch (e) { error = error || hideKey(e.message || e); }
-    checking = false;
+    checking = false; checkWait = 0;
     state.lastCheckAt = Date.now(); state.lastCheckError = error; save(); sset('ckat', state.lastCheckAt);
     const de = typeof document !== 'undefined' && document.documentElement;
     if (de && de.hasAttribute('data-gc-userscript')) de.setAttribute('data-gc-checkedat', String(state.lastCheckAt));
